@@ -158,6 +158,8 @@ button.b.themeBtn{min-width:44px;min-height:44px;border-radius:999px}
 .warn.life{border-left-color:var(--accent)}
 </style>
 <style id="phone-layout">
+.tile .v{overflow-wrap:anywhere}
+button.b.themeBtn{font-size:20px;line-height:1}
 /* Phase 4 phone layout (<=900 px, Android first). Uses tokens only; desktop is unchanged. */
 #cards,#detail,#h-stock,#h-room{scroll-margin-top:64px}
 .lede p{margin:0}
@@ -215,8 +217,28 @@ details.panel>*:not(summary){margin-top:12px}
   .tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
   .tile:last-child:nth-child(odd){grid-column:1/-1}
 }
+<style id="detail-ui">
+/* Designs: "show more" button under the card list */
+#moreWrap{margin-top:10px}
+#moreWrap .more{width:100%;min-height:44px}
+/* Detail view: collapsible sections (summary = heading) */
+.dsec{min-width:0}
+.dsec>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.dsec>summary::-webkit-details-marker{display:none}
+.dsec>summary::after{content:"";margin-left:auto;width:8px;height:8px;flex:0 0 auto;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);transform:rotate(45deg);transition:transform .15s}
+.dsec[open]>summary::after{transform:rotate(-135deg)}
+.dsec>summary h3{margin:0}
+.dsec>summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+@media (prefers-reduced-motion: reduce){.dsec>summary::after{transition:none}}
+/* Scene: calmer size on phones, panel-tone background */
+.scene{background:var(--panel-2)}
+@media (max-width:599px){.scene svg{max-height:340px}}
 </style>
 
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <linearGradient id="bspFloor" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:var(--floor)"/><stop offset="1" style="stop-color:var(--wall)"/></linearGradient>
+</defs></svg>
 <header class="wrap top">
   <div>
     <h1>Board Shelf Planner</h1>
@@ -3492,7 +3514,7 @@ function renderScene(d,thumb){
   const P=p=>p.map(v=>v.toFixed(1)).join(',');
   let s=`<svg viewBox="${(minX-pad).toFixed(0)} ${(minY-pad).toFixed(0)} ${(maxX-minX+2*pad).toFixed(0)} ${(maxY-minY+2*pad).toFixed(0)}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${esc(d.name)}: ${d.dims.w} by ${d.dims.h} by ${d.dims.d} mm">`;
   s+=`<polygon points="${wall.map(P).join(' ')}" style="fill:var(--wall)"/>`;
-  s+=`<polygon points="${floor.map(P).join(' ')}" style="fill:var(--floor)"/>`;
+  s+=`<polygon points="${floor.map(P).join(' ')}" style="fill:url(#bspFloor)"/>`;
   order(d.boxes).forEach(it=>{
     const vf=it.vf||((i,j,l)=>[i?it.bb.x1:it.bb.x0,j?it.bb.y1:it.bb.y0,l?it.bb.z1:it.bb.z0]);
     const base=BASE[it.kind]||BASE.shelf, wood=!['metal','rope','cable','sling','strap','steel','concrete','brick','glass','fabric'].includes(it.kind);
@@ -3552,9 +3574,43 @@ function cutText(d){
 
 /* ---------- output ---------- */
 function wowDots(n){return `<span class="wow" aria-label="Guest effect ${n} of 5">${[1,2,3,4,5].map(i=>`<i class="${i<=n?'on':''}"></i>`).join('')}</span>`;}
+/* ---------- design cards: 24 at a time, thumbnails drawn when they scroll near the screen ---------- */
+const PAGE=24;
+let SHOWN=[], CARD_HTML=null, LASTSIG=null;
+function moreWrap(){
+  let w=document.getElementById('moreWrap');
+  if(!w){
+    w=document.createElement('div'); w.id='moreWrap'; $('#cards').after(w);
+    w.addEventListener('click',e=>{if(!e.target.closest('#moreCards'))return;
+      S.shown=(S.shown||PAGE)+PAGE; drawCards(true); const b=document.getElementById('moreCards'); if(b) b.focus();});
+  }
+  return w;
+}
+function drawCards(append){
+  const host=$('#cards'), n=S.shown||PAGE, list=SHOWN.slice(0,n), left=SHOWN.length-list.length;
+  if(append&&host.querySelector('.card')){
+    host.insertAdjacentHTML('beforeend',list.slice(host.querySelectorAll('.card').length).map(CARD_HTML).join(''));
+  } else {
+    host.innerHTML=list.length?list.map(CARD_HTML).join(''):'<p class="hint">No designs in this style.</p>';
+  }
+  moreWrap().innerHTML=left>0?`<button class="b more" id="moreCards" type="button">Show ${PAGE} more (${left} left)</button>`:'';
+  const draw=el=>{const r=SHOWN.find(x=>String(x.id)===el.dataset.thumb); if(r&&!el.firstChild) el.innerHTML=renderScene(r,true);};
+  if('IntersectionObserver' in window){
+    if(!append||!window._thumbIO){
+      if(window._thumbIO) window._thumbIO.disconnect();
+      window._thumbIO=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){draw(e.target);window._thumbIO.unobserve(e.target);}}),{rootMargin:'300px'});
+    }
+    host.querySelectorAll('[data-thumb]').forEach(el=>window._thumbIO.observe(el));
+  } else host.querySelectorAll('[data-thumb]').forEach(draw);
+}
+/* on a phone the long detail sections start collapsed; the first two and any life-safety section stay open */
+function tidyDetail(){
+  if(matchMedia('(max-width:900px)').matches) document.querySelectorAll('#detail .dsec').forEach((d,i)=>{if(i>1&&!d.querySelector('.life'))d.open=false;});
+  if(!window._dsecPrint){window._dsecPrint=1;addEventListener('beforeprint',()=>document.querySelectorAll('#detail .dsec').forEach(d=>d.open=true));}
+}
 function run(){
   PLAN=planAll(S);
-  if(PLAN.err){$('#summary').innerHTML='';$('#warns').innerHTML='';$('#cards').innerHTML='';$('#detail').innerHTML=`<div class="detail"><p class="empty">${PLAN.err}</p></div>`;return;}
+  if(PLAN.err){$('#summary').innerHTML='';$('#warns').innerHTML='';$('#cards').innerHTML='';moreWrap().innerHTML='';$('#detail').innerHTML=`<div class="detail"><p class="empty">${PLAN.err}</p></div>`;return;}
   $('#summary').innerHTML=`<span>Boards used: <b>${PLAN.use.length}</b> at <b>${PLAN.t} mm</b></span><span>Max span for this load: <b>${Math.round(PLAN.Lmax)} mm</b></span><span>Material: <b>${MATS[S.mat].name}</b></span>`;
   $('#warns').innerHTML=PLAN.warns.map(w=>`<div class="warn">${esc(w)}</div>`).join('');
   const ok=PLAN.results.filter(r=>!r.none), cat=S.cat||'all', srt=S.sort||'area';
@@ -3570,16 +3626,20 @@ function run(){
   const shownOk=shown.filter(r=>!r.none), topA=shownOk.length?Math.max(...shownOk.map(r=>r.area)):0, topY=shownOk.length?Math.max(...shownOk.map(r=>r.yield)):0;
   if(!selected||!shown.find(r=>r.id===selected&&!r.none)) selected=(shown.find(r=>!r.none)||{}).id||null;
   const catName=id=>(CATS.find(k=>k.id===id)||{}).name||'';
-  $('#cards').innerHTML=shown.map(r=>{
+  const cardHtml=r=>{
     if(r.none) return `<div class="card none" aria-disabled="true"><div class="thumb"><span class="hint">${r.mode==='buy'?"Doesn't fit this room":"Doesn't fit this stock"}</span></div><div class="cat${r.cat==='wtf'?' wtf':''}">${catName(r.cat)}</div><div class="nm">${r.name}</div><div class="pl">${r.place}</div></div>`;
     const badge=r.area===topA?'Most surface':r.yield===topY?'Least waste':'';
     return `<button class="card" type="button" data-id="${r.id}" aria-pressed="${r.id===selected}">
       ${badge?`<span class="badge">${badge}</span>`:''}${r.mode==='buy'?`<span class="srcb" title="${r.pro?'Pro / hard build with rigging calcs':'Buy &amp; build: picks its own materials'}">${r.pro?'pro':'buy'}</span>`:''}${r.curves?`<span class="jig" title="${r.curves===true?'Needs a jigsaw or hole saw':'Jigsaw optional'}">${r.curves===true?'jigsaw':'jigsaw opt.'}</span>`:''}
-      <div class="thumb">${renderScene(r,true)}</div>
+      <div class="thumb" data-thumb="${r.id}"></div>
       <div class="cat${r.cat==='wtf'?' wtf':''}">${catName(r.cat)}</div>
       <div class="nm">${r.name}</div><div class="pl">${r.place}</div>
       <div class="nums"><span>${r.area<2000?'—':fmt(r.area/1e6,2)+' m²'}</span><span>${r.mode==='buy'?'':fmt(r.yield*100)+'% yield'}</span></div>${r.mode==='buy'?`<div class="pl" style="font-size:11px">${buyShort(r.shop)}</div>`:''}
-      ${wowDots(r.wow)}</button>`;}).join('')||`<p class="hint">No designs in this style.</p>`;
+      ${wowDots(r.wow)}</button>`;};
+  SHOWN=shown; CARD_HTML=cardHtml;
+  const sig=[cat,src,qq,srt].join('|');
+  if(sig!==LASTSIG){S.shown=PAGE; LASTSIG=sig;} /* a new filter, source, search or sort starts again at 24 */
+  drawCards(false);
   renderDetail();
 }
 function renderDetail(){
@@ -3601,28 +3661,32 @@ function renderDetail(){
       <div class="tile"><span class="k">Overall size</span><span class="v mono" style="font-size:19px">${d.dims.w}×${d.dims.h}×${d.dims.d}</span><span class="s">width × height × depth, mm</span></div>
       <div class="tile"><span class="k">Design load</span><span class="v">${fmt(kg)} kg</span><span class="s">spread over all shelves</span></div>
     </div>
+    <details class="dsec" open><summary><h3>Cut plan</h3></summary>
     <div class="sec">
-      <div class="secrow"><h3>Cut plan</h3><div class="btns"><button class="b" id="copyCuts" type="button">Copy cut list</button><span class="toast" id="copyMsg"></span></div></div>
+      <div class="secrow"><div class="btns"><button class="b" id="copyCuts" type="button">Copy cut list</button><span class="toast" id="copyMsg"></span></div></div>
       <div class="legend"><span><i style="background:${BASE.shelf}"></i>shelf</span><span><i style="background:${BASE.side}"></i>side / divider</span><span><i style="background:${BASE.rail}"></i>rail / cleat / hook</span><span><i style="background:var(--offcut)"></i>reusable offcut</span><span><i style="background:repeating-linear-gradient(45deg,var(--hatch) 0 2px,transparent 2px 5px)"></i>waste</span><span>dashed line = rip cut</span></div>
       <div class="cutwrap">${renderCuts(d)}</div>
       ${unused?`<p class="hint">${unused} board${unused>1?'s':''} stay uncut for another project.</p>`:''}
       <textarea id="cutText" readonly>${esc(cutText(d))}</textarea>
-    </div>
+    </div></details>
+    <details class="dsec" open><summary><h3>Parts / Hardware</h3></summary>
     <div class="cols">
       <div class="sec"><h3>Parts</h3><div class="tbl-wrap"><table class="parts"><thead><tr><th>Part</th><th style="text-align:right">Qty</th><th style="text-align:right">Length</th><th style="text-align:right">Width</th></tr></thead>
         <tbody>${plist.map(p=>`<tr><td>${p.label}</td><td class="n">${p.n}</td><td class="n">${p.len}</td><td class="n">${p.w}</td></tr>`).join('')}</tbody></table></div>
         <p class="hint">All parts ${PLAN.t} mm thick. Straight rip and cross cuts${d.extra||''}.${d.curves==='opt'?' A jigsaw is optional, see the build notes.':''}</p></div>
       <div class="sec"><h3>Hardware</h3><ul>${d.hw.map(h=>`<li>${esc(h)}</li>`).join('')}</ul>
         <h3 style="margin-top:8px">Build notes</h3><ul>${d.notes.map(h=>`<li>${esc(h)}</li>`).join('')}</ul></div>
-    </div>
+    </div></details>
+    <details class="dsec" open><summary><h3>Build manual</h3></summary>
     <div class="sec manual" id="manual">
-      <div class="secrow"><h3>Build manual</h3><div class="btns"><button class="b p" id="copyMan" type="button">Copy manual</button><button class="b" id="printMan" type="button">Print</button><button class="b" id="openGuide" type="button">General guide</button><span class="toast" id="manMsg"></span></div></div>
+      <div class="secrow"><div class="btns"><button class="b p" id="copyMan" type="button">Copy manual</button><button class="b" id="printMan" type="button">Print</button><button class="b" id="openGuide" type="button">General guide</button><span class="toast" id="manMsg"></span></div></div>
       ${manualHtml(d)}
-    </div>
+    </div></details>
   </article>`;
   $('#copyMan').addEventListener('click',()=>copyOut(manualText(d),'#manMsg'));
   $('#printMan').addEventListener('click',()=>{try{window.print();}catch(e){$('#manMsg').textContent='Printing is blocked here: use Copy manual';}});
   $('#openGuide').addEventListener('click',()=>{const g=$('#guide');g.open=true;g.scrollIntoView({behavior:'smooth',block:'start'});});
+  tidyDetail();
   $('#copyCuts').addEventListener('click',()=>{
     const t=$('#cutText').value;
     const fb=()=>{const ta=$('#cutText');ta.style.display='block';ta.select();$('#copyMsg').textContent='Selected: press Ctrl+C';};
@@ -3643,37 +3707,41 @@ function renderDetailBuy(d){
       <div class="tile"><span class="k">To buy</span><span class="v" style="font-size:19px">${buyShort(d.shop).replace(/ · \d+ of yours/,'')}</span><span class="s">see the list below</span></div>
       ${kgl?`<div class="tile"><span class="k">Design load</span><span class="v" style="font-size:19px">${esc(kgl)}</span><span class="s">checked in the notes</span></div>`:''}
     </div>
+    <details class="dsec" open><summary><h3>Shopping list</h3></summary>
     <div class="sec">
-      <div class="secrow"><h3>Shopping list</h3><div class="btns"><button class="b" id="copyShop" type="button">Copy list</button><span class="toast" id="shopMsg"></span></div></div>
+      <div class="secrow"><div class="btns"><button class="b" id="copyShop" type="button">Copy list</button><span class="toast" id="shopMsg"></span></div></div>
       <div class="tbl-wrap"><table class="parts shopt"><thead><tr><th>Qty</th><th>Item</th><th>Note</th></tr></thead><tbody>${rows.map(r=>`<tr class="${r.mine?'mine':''}"><td>${r.q}</td><td>${esc(r.what)}</td><td>${esc(r.note)}</td></tr>`).join('')}</tbody></table></div>
       <p class="hint">Green rows come from your own boards. Standard sizes: sheets 2440 × 1220 mm (panels 2500 × 600 mm), lumber 2400 mm, steel 3000 mm: ask the store to cut to length.</p>
-    </div>
+    </div></details>
     ${d.rig?rigHtml(d):''}
+    <details class="dsec" open><summary><h3>Parts / Hardware</h3></summary>
     <div class="cols">
       <div class="sec"><h3>Parts</h3><div class="tbl-wrap"><table class="parts"><thead><tr><th>Part</th><th style="text-align:right">Qty</th><th>Material</th><th style="text-align:right">Size</th></tr></thead>
         <tbody>${plist.map(p=>p.kind==='rect'?`<tr><td>${esc(p.label)}</td><td class="n">${p.q}</td><td>${SM[p.m].n} ${p.t} mm</td><td class="n">${p.L} × ${p.w}</td></tr>`:`<tr><td>${esc(p.label)}</td><td class="n">${p.q}</td><td>${esc(PR[p.p].n)}</td><td class="n">${p.L}</td></tr>`).join('')}</tbody></table></div></div>
       <div class="sec"><h3>Hardware</h3><ul>${d.hw.map(h=>`<li>${esc(h)}</li>`).join('')}</ul><h3 style="margin-top:8px">Build notes</h3><ul>${d.notes.map(h=>`<li>${esc(h)}</li>`).join('')}</ul></div>
-    </div>
+    </div></details>
+    <details class="dsec" open><summary><h3>Build manual</h3></summary>
     <div class="sec manual" id="manual">
-      <div class="secrow"><h3>Build manual</h3><div class="btns"><button class="b p" id="copyMan" type="button">Copy manual</button><button class="b" id="printMan" type="button">Print</button><button class="b" id="openGuide" type="button">General guide</button><span class="toast" id="manMsg"></span></div></div>
+      <div class="secrow"><div class="btns"><button class="b p" id="copyMan" type="button">Copy manual</button><button class="b" id="printMan" type="button">Print</button><button class="b" id="openGuide" type="button">General guide</button><span class="toast" id="manMsg"></span></div></div>
       ${manualHtml(d)}
-    </div>
+    </div></details>
   </article>`;
   $('#copyShop').addEventListener('click',()=>copyOut(shopText(d),'#shopMsg'));
   $('#copyMan').addEventListener('click',()=>copyOut(manualText(d),'#manMsg'));
   $('#printMan').addEventListener('click',()=>{try{window.print();}catch(e){$('#manMsg').textContent='Printing is blocked here: use Copy manual';}});
   $('#openGuide').addEventListener('click',()=>{const g=$('#guide');g.open=true;g.scrollIntoView({behavior:'smooth',block:'start'});});
+  tidyDetail();
 }
 function rigHtml(d){
   const sf=d.ctx.sf, b=d.ctx.sfb, kN=v=>(v/1000).toFixed(2);
-  return `<div class="sec rig">
-    <div class="secrow"><h3>Rigging calculation</h3><span class="tag">safety factor ${sf} on ${b}</span></div>
+  return `<details class="dsec" open><summary><h3>Rigging calculation</h3></summary><div class="sec rig">
+    <div class="secrow"><span class="tag">safety factor ${sf} on ${b}</span></div>
     ${d.life?`<div class="warn life"><b>Life-safety item.</b> People are carried by this structure. The numbers below are a first estimate to size the gear; the anchors, the structure it hangs from and the finished build must be checked and signed off by a competent person before use.</div>`:''}
     <h4>Load cases</h4><ul>${d.rig.cases.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>
     <div class="tbl-wrap"><table class="parts"><thead><tr><th>Component</th><th style="text-align:right">Qty</th><th style="text-align:right">Design force F, each</th><th style="text-align:right">Required ${b} ≥ ${sf} × F</th><th style="text-align:right">Proof test 1.5 × F</th><th>Notes</th></tr></thead>
       <tbody>${d.rig.items.map(i=>`<tr><td>${esc(i.comp)}</td><td class="n">${i.n}</td><td class="n">${kN(i.F)} kN<br><span class="hint">${Math.round(i.F/G)} kg</span></td><td class="n"><b>${kN(i.F*sf)} kN</b></td><td class="n">${i.kind==='anchor'?kN(i.F*1.5)+' kN':'—'}</td><td>${esc(i.note)}</td></tr>`).join('')}</tbody></table></div>
     <p class="hint">${esc(RIG_REF[0])} Forces already include the dynamic factors listed above. Estimates only: not a certified design.</p>
-  </div>`;
+  </div></details>`;
 }
 function manualHtml(d){let n=0;return manualParts(d).map(p=>`<h4>${esc(p.h)}</h4><ol>${p.items.map(x=>`<li><b>${++n}</b><span>${esc(x)}</span></li>`).join('')}</ol>`).join('');}
 function copyOut(t,sel){const fb=()=>{$(sel).textContent='Copy blocked: select the text and use Ctrl+C';};

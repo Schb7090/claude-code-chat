@@ -238,6 +238,8 @@ Do the steps in this order; test after each.
      #stockTbl td{padding:0}
      #stockTbl td:first-child{grid-column:1/-1}
      #stockTbl input{font-size:16px;min-height:44px}
+     /* thead is hidden, so label each field: <td data-l="X"> etc. in renderStock, same names as the header */
+     #stockTbl td[data-l]:not(:first-child)::before{content:attr(data-l);display:block;font-size:11px;color:var(--muted)}
      .c-name,.c-num,.c-qty{width:100%}
      .x{min-width:44px;min-height:44px}
    }
@@ -252,7 +254,9 @@ Do the steps in this order; test after each.
 8. **Tiles:** `.tiles{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}` leaves a gap; on phones use
    `repeat(2,minmax(0,1fr))` and give the last tile `grid-column:1/-1` when the count is odd
    (`.tile:last-child:nth-child(odd){grid-column:1/-1}`).
-9. **Touch targets:** every `button.b`, `.chip`, `select`, `input` ≥ 44 px high on phones; inputs use `font-size:16px`.
+9. **Touch targets:** every `button.b`, `.chip`, `select`, `input` and `summary` (the "What it does", guide and
+   detail-section toggles) ≥ 44 px high on phones; inputs use `font-size:16px`, including `.search`, whose own
+   `font-size:13px` rule otherwise wins over the element rule. `shots.js` fails on phone controls that miss either.
 10. **Accept when:** on `phone360-*-top.png` the first screen shows the title, the jump bar and the start of the
     design list; no horizontal scroll at 360 px; board rows show full names; tapping a card scrolls to its detail;
     desktop layout (1280 px) looks the same as after phase 2.

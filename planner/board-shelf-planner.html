@@ -193,8 +193,10 @@ details.panel>*:not(summary){margin-top:12px}
 @media (max-width:560px){
   #stockTbl thead{display:none}
   #stockTbl tr{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) 44px;gap:6px;padding:8px 0;border-bottom:1px solid var(--line)}
-  #stockTbl td{padding:0}
+  #stockTbl td{padding:0;align-self:end}
   #stockTbl td:first-child{grid-column:1/-1}
+  /* thead is hidden here, so each field gets its column name above it (same names as the desktop header) */
+  #stockTbl td[data-l]:not(:first-child)::before{content:attr(data-l);display:block;font-family:var(--f-mono);font-size:11px;letter-spacing:.04em;color:var(--muted);margin:0 0 2px 2px}
   #stockTbl input{font-size:16px;min-height:44px}
   .c-name,.c-num,.c-qty{width:100%}
   .x{min-width:44px;min-height:44px}
@@ -208,9 +210,11 @@ details.panel>*:not(summary){margin-top:12px}
   #srcChips,#chips{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:4px}
   .chip{flex:0 0 auto}
   .filters{flex-direction:column;flex-wrap:nowrap;align-items:stretch}
-  .search{width:100%}
+  .search{width:100%;font-size:16px}
   /* Touch targets and 16px inputs (stops iOS/Android zoom on focus) */
   button.b,.chip,select{min-height:44px}
+  details.more>summary,.guide>summary{padding:11px 0;min-height:44px;box-sizing:border-box}
+  .dsec>summary{min-height:44px}
   input:not([type=checkbox]):not([type=radio]){min-height:44px}
   input,select,textarea,input[type=number]{font-size:16px}
   /* Tiles: two columns, odd last tile spans the row */
@@ -3435,11 +3439,11 @@ const fmt=(v,d=0)=>Number(v).toLocaleString('en-GB',{minimumFractionDigits:d,max
 function renderStock(){
   const tb=$('#stockTbl tbody');
   tb.innerHTML=S.stock.map((r,i)=>`<tr>
-    <td><input class="c-name" id="st-n-${i}" data-i="${i}" data-f="name" value="${esc(r.name)}" placeholder="Name" aria-label="Name row ${i+1}"></td>
-    <td><input class="c-num" type="number" inputmode="numeric" id="st-x-${i}" data-i="${i}" data-f="x" value="${r.x}" placeholder="Length" aria-label="X row ${i+1}"></td>
-    <td><input class="c-num" type="number" inputmode="numeric" id="st-y-${i}" data-i="${i}" data-f="y" value="${r.y}" placeholder="Width" aria-label="Y row ${i+1}"></td>
-    <td><input class="c-num" type="number" inputmode="numeric" id="st-z-${i}" data-i="${i}" data-f="z" value="${r.z}" placeholder="Thickness" aria-label="Z row ${i+1}"></td>
-    <td><input class="c-qty" type="number" inputmode="numeric" min="0" id="st-q-${i}" data-i="${i}" data-f="q" value="${r.q}" placeholder="Qty" aria-label="Quantity row ${i+1}"></td>
+    <td data-l="Name"><input class="c-name" id="st-n-${i}" data-i="${i}" data-f="name" value="${esc(r.name)}" placeholder="Name" aria-label="Name row ${i+1}"></td>
+    <td data-l="X"><input class="c-num" type="number" inputmode="numeric" id="st-x-${i}" data-i="${i}" data-f="x" value="${r.x}" placeholder="Length" aria-label="X row ${i+1}"></td>
+    <td data-l="Y"><input class="c-num" type="number" inputmode="numeric" id="st-y-${i}" data-i="${i}" data-f="y" value="${r.y}" placeholder="Width" aria-label="Y row ${i+1}"></td>
+    <td data-l="Z"><input class="c-num" type="number" inputmode="numeric" id="st-z-${i}" data-i="${i}" data-f="z" value="${r.z}" placeholder="Thickness" aria-label="Z row ${i+1}"></td>
+    <td data-l="Qty"><input class="c-qty" type="number" inputmode="numeric" min="0" id="st-q-${i}" data-i="${i}" data-f="q" value="${r.q}" placeholder="Qty" aria-label="Quantity row ${i+1}"></td>
     <td><button class="x" type="button" data-del="${i}" aria-label="Remove row ${i+1}">×</button></td></tr>`).join('');
   $('#exNote').className='hint'+(S.example?' ex':'');
   $('#exNote').textContent=S.example?'Example stock loaded. Replace it with your boards (mm, any order).':'Dimensions in mm, any order: the largest is taken as length, the smallest as thickness.';

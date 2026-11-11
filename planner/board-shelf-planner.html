@@ -74,7 +74,6 @@ textarea{min-height:96px;font-family:var(--f-mono);font-size:13px}
 .warns{display:flex;flex-direction:column;gap:6px}
 .warn{font-size:13px;border-left:3px solid var(--warn);padding:4px 10px;background:var(--panel)}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:10px}
-@media (max-width:560px){.cards{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;padding-bottom:6px}.card{flex:0 0 172px;scroll-snap-align:start}}
 .card{all:unset;box-sizing:border-box;cursor:pointer;background:var(--panel);background:color-mix(in srgb,var(--panel) 94%,transparent);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:10px;display:flex;flex-direction:column;gap:6px;position:relative}
 .card:hover{border-color:var(--muted)}
 .card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -158,21 +157,82 @@ button.b.themeBtn{min-width:44px;min-height:44px;border-radius:999px}
 .rig ul{margin:0;padding-left:18px}
 .warn.life{border-left-color:var(--accent)}
 </style>
+<style id="phone-layout">
+/* Phase 4 phone layout (<=900 px, Android first). Uses tokens only; desktop is unchanged. */
+#cards,#detail,#h-stock,#h-room{scroll-margin-top:64px}
+.lede p{margin:0}
+details.more>p{margin:8px 0 0}
+details.more>summary{cursor:pointer;color:var(--accent);font-size:14px;margin-top:6px}
+details.more>summary::-webkit-details-marker{display:none}
+@media (min-width:901px){details.more>summary{display:none}}
+/* Input panels as collapsible details (all widths; the arrow shows on phones) */
+details.panel{display:block}
+details.panel>summary{list-style:none;cursor:pointer}
+details.panel>summary::-webkit-details-marker{display:none}
+details.panel>summary h2{margin:0}
+details.panel>*:not(summary){margin-top:12px}
+@media (max-width:900px){
+  details.panel>summary{display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:44px}
+  details.panel>summary::after{content:"\25BE";color:var(--muted);font-size:16px}
+  details.panel:not([open])>summary::after{content:"\25B8"}
+}
+/* Phone: designs first, then a sticky jump bar */
+.jump{display:none}
+@media (max-width:900px){
+  .layout{display:flex;flex-direction:column;align-items:stretch}
+  .layout>.main{order:1}
+  .layout>aside{order:2}
+  .jump{display:flex;position:sticky;top:0;z-index:5;gap:6px;overflow-x:auto;scrollbar-width:none;margin:0 -16px;padding:8px 16px;background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+  .jump a{flex:0 0 auto;display:inline-flex;align-items:center;min-height:44px;padding:0 14px;border:1px solid var(--line);border-radius:999px;background:var(--panel);color:var(--ink);text-decoration:none;font-size:14px;white-space:nowrap}
+  .jump a:hover{border-color:var(--muted)}
+}
+@media (max-width:600px){.top .mark{display:none}}
+/* Board table: stacked rows on phones */
+@media (max-width:560px){
+  #stockTbl thead{display:none}
+  #stockTbl tr{display:grid;grid-template-columns:repeat(4,minmax(0,1fr)) 44px;gap:6px;padding:8px 0;border-bottom:1px solid var(--line)}
+  #stockTbl td{padding:0}
+  #stockTbl td:first-child{grid-column:1/-1}
+  #stockTbl input{font-size:16px;min-height:44px}
+  .c-name,.c-num,.c-qty{width:100%}
+  .x{min-width:44px;min-height:44px}
+  /* Cards: two-column grid instead of the carousel */
+  .cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;overflow:visible}
+  .card{flex:none}
+  .card .thumb{height:96px}
+}
+/* Chips scroll sideways instead of wrapping; search takes full width */
+@media (max-width:600px){
+  #srcChips,#chips{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;padding-bottom:4px}
+  .chip{flex:0 0 auto}
+  .filters{flex-direction:column;flex-wrap:nowrap;align-items:stretch}
+  .search{width:100%}
+  /* Touch targets and 16px inputs (stops iOS/Android zoom on focus) */
+  button.b,.chip,select{min-height:44px}
+  input:not([type=checkbox]):not([type=radio]){min-height:44px}
+  input,select,textarea,input[type=number]{font-size:16px}
+  /* Tiles: two columns, odd last tile spans the row */
+  .tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .tile:last-child:nth-child(odd){grid-column:1/-1}
+}
+</style>
 
 <header class="wrap top">
   <div>
     <h1>Board Shelf Planner</h1>
-    <p class="lede">Enter the boards you have. The planner rips and crosscuts them for 73 designs, and checks every span for your load. It also offers 100 Buy &amp; build designs that choose their own materials and thicknesses (plywood, lumber, steel tube, pipe, blocks, crates), use your boards where the thickness fits, and give you a shopping list. Then 49 Pro / hard builds (rigged at height, tensile, welded steel, big outdoor rigs) with rigging calculations at your own safety factor. Every design has a numbered build manual.</p>
+    <div class="lede"><p>Enter the boards you have.</p>
+    <details class="more" open><summary>What it does</summary><p>The planner rips and crosscuts them for 73 designs, and checks every span for your load. It also offers 100 Buy &amp; build designs that choose their own materials and thicknesses (plywood, lumber, steel tube, pipe, blocks, crates), use your boards where the thickness fits, and give you a shopping list. Then 49 Pro / hard builds (rigged at height, tensile, welded steel, big outdoor rigs) with rigging calculations at your own safety factor. Every design has a numbered build manual.</p></details></div>
   </div>
   <div class="mark">units: mm · kerf-aware · 222 designs<br>jigsaw only where marked</div>
   <div class="themeBox"><button class="b themeBtn" id="themeBtn" type="button" aria-label="Colour theme: follows the phone">◐</button>
   <label class="plainBg"><input type="checkbox" id="plainBg"> Plain background</label></div>
 </header>
+<nav class="jump" aria-label="Sections"><a href="#cards">Designs</a><a href="#detail">Selected</a><a href="#h-stock">Boards</a><a href="#h-room">Room &amp; load</a></nav>
 
 <main class="wrap layout">
   <aside>
-    <section class="panel" aria-labelledby="h-stock">
-      <h2 id="h-stock">Your boards</h2>
+    <details class="panel" open aria-labelledby="h-stock">
+      <summary><h2 id="h-stock">Your boards</h2></summary>
       <p class="hint" id="exNote">Dimensions in mm, any order: the planner treats the largest as length and the smallest as thickness.</p>
       <div class="tbl-wrap">
         <table id="stockTbl">
@@ -192,10 +252,10 @@ button.b.themeBtn{min-width:44px;min-height:44px;border-radius:999px}
         </div>
         <p class="hint" id="pasteMsg"></p>
       </div>
-    </section>
+    </details>
 
-    <section class="panel" aria-labelledby="h-room">
-      <h2 id="h-room">Room and load</h2>
+    <details class="panel" open aria-labelledby="h-room">
+      <summary><h2 id="h-room">Room and load</h2></summary>
       <div class="fields">
         <label class="full">Board material
           <select id="f-mat"></select></label>
@@ -212,7 +272,7 @@ button.b.themeBtn{min-width:44px;min-height:44px;border-radius:999px}
         <label>Factor applies to<select id="f-sfb"><option value="MBS">Breaking strength (MBS)</option><option value="WLL">Working load limit (WLL)</option></select></label>
       </div>
       <p class="hint">Span check: long-term sag under the chosen load at most 1/300 of the span, creep included. It is an engineering estimate, not a certified rating. Tables, seats and beds use their own loads (people, 100–150 kg at mid-span, 0.4–2 kN/m² on tops), stated in each design’s notes; the material you choose still sets the stiffness.</p>
-    </section>
+    </details>
   </aside>
 
   <section class="main" aria-live="polite">
@@ -3353,11 +3413,11 @@ const fmt=(v,d=0)=>Number(v).toLocaleString('en-GB',{minimumFractionDigits:d,max
 function renderStock(){
   const tb=$('#stockTbl tbody');
   tb.innerHTML=S.stock.map((r,i)=>`<tr>
-    <td><input class="c-name" id="st-n-${i}" data-i="${i}" data-f="name" value="${esc(r.name)}" aria-label="Name row ${i+1}"></td>
-    <td><input class="c-num" type="number" inputmode="numeric" id="st-x-${i}" data-i="${i}" data-f="x" value="${r.x}" aria-label="X row ${i+1}"></td>
-    <td><input class="c-num" type="number" inputmode="numeric" id="st-y-${i}" data-i="${i}" data-f="y" value="${r.y}" aria-label="Y row ${i+1}"></td>
-    <td><input class="c-num" type="number" inputmode="numeric" id="st-z-${i}" data-i="${i}" data-f="z" value="${r.z}" aria-label="Z row ${i+1}"></td>
-    <td><input class="c-qty" type="number" inputmode="numeric" min="0" id="st-q-${i}" data-i="${i}" data-f="q" value="${r.q}" aria-label="Quantity row ${i+1}"></td>
+    <td><input class="c-name" id="st-n-${i}" data-i="${i}" data-f="name" value="${esc(r.name)}" placeholder="Name" aria-label="Name row ${i+1}"></td>
+    <td><input class="c-num" type="number" inputmode="numeric" id="st-x-${i}" data-i="${i}" data-f="x" value="${r.x}" placeholder="Length" aria-label="X row ${i+1}"></td>
+    <td><input class="c-num" type="number" inputmode="numeric" id="st-y-${i}" data-i="${i}" data-f="y" value="${r.y}" placeholder="Width" aria-label="Y row ${i+1}"></td>
+    <td><input class="c-num" type="number" inputmode="numeric" id="st-z-${i}" data-i="${i}" data-f="z" value="${r.z}" placeholder="Thickness" aria-label="Z row ${i+1}"></td>
+    <td><input class="c-qty" type="number" inputmode="numeric" min="0" id="st-q-${i}" data-i="${i}" data-f="q" value="${r.q}" placeholder="Qty" aria-label="Quantity row ${i+1}"></td>
     <td><button class="x" type="button" data-del="${i}" aria-label="Remove row ${i+1}">×</button></td></tr>`).join('');
   $('#exNote').className='hint'+(S.example?' ex':'');
   $('#exNote').textContent=S.example?'Example stock loaded. Replace it with your boards (mm, any order).':'Dimensions in mm, any order: the largest is taken as length, the smallest as thickness.';
@@ -3625,9 +3685,12 @@ $('#srcChips').addEventListener('click',e=>{const b=e.target.closest('[data-src]
 $('#chips').addEventListener('click',e=>{const b=e.target.closest('[data-cat]');if(!b)return;S.cat=b.dataset.cat;save();run();});
 $('#f-sort').addEventListener('change',e=>{S.sort=e.target.value;save();run();});
 $('#cards').addEventListener('click',e=>{const b=e.target.closest('.card[data-id]');if(!b)return;selected=b.dataset.id;
-  document.querySelectorAll('.card[data-id]').forEach(c=>c.setAttribute('aria-pressed',c.dataset.id===selected));renderDetail();});
+  document.querySelectorAll('.card[data-id]').forEach(c=>c.setAttribute('aria-pressed',c.dataset.id===selected));renderDetail();
+  if(matchMedia('(max-width:900px)').matches)document.getElementById('detail').scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});});
 
-renderStock();initFields();run();
+renderStock();initFields();
+if(matchMedia('(max-width:900px)').matches){document.querySelectorAll('details.more').forEach(d=>d.open=false);if(!S.example)document.querySelectorAll('aside details.panel').forEach(d=>d.open=false);}
+run();
 </script>
 
 </body></html>

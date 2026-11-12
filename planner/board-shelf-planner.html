@@ -3758,7 +3758,32 @@ $('#cards').addEventListener('click',e=>{const b=e.target.closest('.card[data-id
 
 renderStock();initFields();
 if(matchMedia('(max-width:900px)').matches){document.querySelectorAll('details.more').forEach(d=>d.open=false);if(!S.example)document.querySelectorAll('aside details.panel').forEach(d=>d.open=false);}
+
+/* ---------- extension points for feature scripts (quote, sign-off, share) ---------- */
+window.bspDetailHooks=window.bspDetailHooks||[];
+window.bspUse=name=>{try{return (window.claude&&window.claude.use)?Promise.resolve(window.claude.use(name)).catch(()=>null):Promise.resolve(null);}catch(e){return Promise.resolve(null);}};
+window.bspApi={get PLAN(){return PLAN;},get S(){return S;},get selected(){return selected;},select(id){selected=id;run();},run:()=>run(),save:()=>save(),esc,fmt,renderScene,shopRows,manualParts,G};
+const _bspRenderDetail=renderDetail;
+renderDetail=function(){_bspRenderDetail();const d=PLAN&&PLAN.results.find(r=>r.id===selected);const el=document.querySelector('#detail .detail');
+  if(d&&el) window.bspDetailHooks.forEach(fn=>{try{fn(d,el);}catch(e){console.error(e);}});};
 run();
 </script>
+
+<!-- ===== feature slot A: quote sheet. Only edit between the two tags below. ===== -->
+<style id="feat-quote-css"></style>
+<script id="feat-quote"></script>
+<!-- ===== end of slot A ===== -->
+<!-- (spacer) -->
+<!-- (spacer) -->
+<!-- ===== feature slot B: rigging sign-off record. Only edit between the two tags below. ===== -->
+<style id="feat-signoff-css"></style>
+<script id="feat-signoff"></script>
+<!-- ===== end of slot B ===== -->
+<!-- (spacer) -->
+<!-- (spacer) -->
+<!-- ===== feature slot C: client share view. Only edit between the two tags below. ===== -->
+<style id="feat-share-css"></style>
+<script id="feat-share"></script>
+<!-- ===== end of slot C ===== -->
 
 </body></html>

@@ -2345,7 +2345,11 @@ const TBL_HW={
   slab:['40 wood screws 4×50 + glue','Wood plugs or dowels for hidden joints (optional)','4 felt pads'],
   xframe:['4 bolts M8 × 60 + nuts at the X crossings (or weld)','Rubber end caps for the feet','8 screws 4×30 for the top rails','Metal primer and paint']
 };
+/* a user-chosen size (c.fit): a number > 0 overrides the matching size param; anything else keeps the default */
+const fitN=v=>typeof v==='number'&&v>0&&isFinite(v)?v:null;
+function fitOver(c,p,map){const f=c&&c.fit; if(!f) return p; const o={...p}; map.forEach(([k,dim])=>{const v=fitN(f[dim]); if(v!=null) o[k]=v;}); return o;}
 function bTbl(c,p){
+  p=fitOver(c,p,[['L','w'],['W','d'],['H','h']]);
   const S=mkScene(c), ov=p.ov==null?60:p.ov, leg=p.leg, tk=p.top||'sheet', m=sheetOf(c,p.sheet);
   if(p.H>c.Hmax) return null;
   let H=p.H, W=p.W, L=Math.min(p.L,c.Wmax-100);
@@ -2500,6 +2504,7 @@ function crateBox(S,x,y,z,w,h,d){ /* open-front wine crate drawn as 4 planks + s
 }
 function palletBox(S,x,y,z,Lp,Wp){ S.box(x,x+Lp,y+122,y+144,z,z+Wp,'pallet'); S.box(x,x+Lp,y,y+22,z,z+Wp,'pallet'); [0,(Wp-98)/2,Wp-98].forEach(zz=>S.box(x,x+Lp,y+22,y+122,z+zz,z+zz+98,'pallet')); }
 function bPshelf(c,p){
+  p=fitOver(c,p,[['D','d'],['H','h']]);
   const S=mkScene(c), m=sheetOf(c,p.sheet), ty=p.type||'frame', q=p.q!=null?p.q:(LOADS[c.load]||LOADS.books).q, D=p.D||300, gap=p.gap||c.gap;
   const post=p.post||'tube', a=({tube:30,pipe:27,lumber:45})[post]||30, pk=({tube:'sq30',pipe:'pipe',lumber:'l4545'})[post], fh=p.cast?70:0, nb0=p.bays||2;
   const hMax=Math.min(p.H||c.Hmax,c.Hmax); let steps=[], hw=[], notes=[], area=0, summary='';
@@ -2618,6 +2623,7 @@ SH('b_steelwall','Steel-frame wall rack','Wall','classic',3,{type:'angle',bw:120
 /* ---------- builder: plywood cabinets, drawers, doors ---------- */
 SM.hb={n:'Hardboard',E:3000,kc:3,sz:[2440,1220],th:[3,6]};
 function bCarc(c,p){
+  p=fitOver(c,p,[['W','w'],['H','h'],['D','d']]);
   const S=mkScene(c), m=sheetOf(c,p.sheet||'ply'), q=p.q!=null?p.q:(LOADS[c.load]||LOADS.books).q, W0=Math.min(p.W,c.Wmax), H0=Math.min(p.H,c.Hmax), D=p.D;
   if(p.H>c.Hmax) return null;
   const base=p.base||'plinth', ph=base==='plinth'?80:base==='legs'?150:0, tmin=p.tmin||15;
@@ -2692,6 +2698,7 @@ CA('b_toybins','Toy shelf with bins','Floor','small',2,{W:800,H:500,D:350,base:'
 
 /* ---------- builder: beds ---------- */
 function bBed(c,p){
+  p=fitOver(c,p,[['hh','h']]);
   const S=mkScene(c), ty=p.type||'lumber', m=sheetOf(c,'ply'), sizes=p.size?[p.size]:[[1600,2000],[1400,2000],[900,2000],[900,1900],[800,1900]];
   let Mw=0,Lm=0; for(const [w,l] of sizes){if(w+160<=c.Wmax&&l+76<=2400){Mw=w;Lm=l;break;}} if(!Mw) return null;
   const Hl=p.Hl||200, hd=p.head||'none', hh=p.hh||1000;
@@ -2877,6 +2884,7 @@ const RIG_REF=['Typical minimum strengths to compare with (always read the marki
 
 /* ---------- rigged at height: suspended shelves ---------- */
 function bHangShelf(c,p){
+  p=fitOver(c,p,[['L','w'],['D','d']]);
   const S=mkScene(c); rigInit(S); const m=sheetOf(c,p.sheet||'ply'), q=p.q!=null?p.q:(LOADS[c.load]||LOADS.books).q, ceil=c.ceil;
   const L=Math.min(p.L,c.Wmax-200), D=p.D, gap=p.gap||c.gap, wall=!!p.wall;
   const t=thickFor(c,m,Math.max(.6*L,.2*L/.59),q,{b:D,min:15,max:30}).t, ytop=ceil-(p.drop||250), ymin=p.ymin||400;
@@ -2910,6 +2918,7 @@ function bHangShelf(c,p){
 
 /* ---------- rigged at height: suspended platforms for people ---------- */
 function bHangPlat(c,p){
+  p=fitOver(c,p,[['L','w'],['D','d']]);
   const S=mkScene(c); rigInit(S); const m=sheetOf(c,'ply'), ceil=c.ceil, L=Math.min(p.L,c.Wmax-200), D=p.D, y=p.y, wall=!!p.wall, X0=(c.Wmax-L)/2;
   if(y+300>ceil) return null;
   const tdk=thickFor(c,m,400,1.5,{b:D,min:18,max:25,P:p.pers?1500:0}).t, yd=y-tdk;
@@ -2952,6 +2961,7 @@ function bHangPlat(c,p){
 
 /* ---------- swings, hanging chairs, hammocks ---------- */
 function bSwing(c,p){
+  if(p.kind==='hammock') p=fitOver(c,p,[['span','w']]);
   const S=mkScene(c); rigInit(S); const ceil=p.beamY||c.ceil, k=p.kind, X0c=c.Wmax/2; let area=0, summary='', steps=[], cases=[];
   if(k==='bench'||k==='bed'){
     const L=k==='bed'?1900:1200, D=k==='bed'?800:450, ys=k==='bed'?400:450, X0=X0c-L/2, nb=Math.ceil(D/140);
@@ -2992,6 +3002,7 @@ function bSwing(c,p){
 
 /* ---------- tensile and cable structures ---------- */
 function bTensile(c,p){
+  p=fitOver(c,p,[['W','w'],['L','w'],['D','d'],['H','h']]);
   const S=mkScene(c); rigInit(S); const k=p.kind, m=sheetOf(c,p.sheet||'ply'), q=p.q!=null?p.q:(LOADS[c.load]||LOADS.books).q, ceil=c.ceil;
   let area=0, summary='', steps=[];
   if(k==='wirewall'){
@@ -3065,6 +3076,7 @@ function bTensile(c,p){
 
 /* ---------- welded steel cantilevers ---------- */
 function bCanti(c,p){
+  p=fitOver(c,p,[['L','w'],['D','d']]);
   const S=mkScene(c); rigInit(S); const k=p.kind, m=sheetOf(c,p.sheet||'panel'), L=Math.min(p.L,c.Wmax-200), D=p.D, X0=(c.Wmax-L)/2, sp=p.sp||700;
   const nb=Math.max(2,Math.ceil((L-200)/sp)+1), trib=L/nb, q=p.q!=null?p.q:.6;
   const rows=p.n||1, gap=p.gap||c.gap, y0=p.y||740;
@@ -3360,9 +3372,13 @@ function planAll(S){
     warns.push(`${skip.length} board${skip.length>1?'s':''} at ${th} mm thick left out: designs use one thickness (${t} mm) so joints and spans stay consistent.`);}
   const base={sfb:S.sfb||'MBS',k,Wmax:+S.wallW||2400,Hmax:+S.maxH||2000,gap:+S.gap||300,t,Lmax,load:S.load,E:(MATS[S.mat]||MATS.softwood).E,kc:(MATS[S.mat]||MATS.softwood).kc};
   const stripsBy={}; ds.forEach(D=>stripsBy[D]=makeStrips(use,D,k));
+  const FIT=S.fit||{};
   const results=GENS.map(G=>{
     let best=null;
-    ds.forEach(D=>{const c={...base,D};let r=null;try{r=G.fn(stripsBy[D],c);}catch(e){r=null;}
+    /* a resized design: its own width/height limits, and only depths up to the fitted depth */
+    const fit=FIT[G.id]||{}, gb={...base,Wmax:fitN(fit.w)||base.Wmax,Hmax:fitN(fit.h)||base.Hmax}, fd=fitN(fit.d), all=[...ds];
+    const dset=fd==null?all:(all.some(D=>D<=fd)?all.filter(D=>D<=fd):(all.length?[Math.min(...all)]:[]));
+    dset.forEach(D=>{const c={...gb,D};let r=null;try{r=G.fn(stripsBy[D],c);}catch(e){r=null;}
       if(r&&r.area>0&&(!best||r.area>best.area+1)) best={...r,D,ctx:c};});
     if(!best) return {...G,none:true};
     return finalize({...G,...best},boards,k);
@@ -3370,7 +3386,7 @@ function planAll(S){
   const tsArea={}; boards.forEach(b=>{const tt=Math.round(b.T);tsArea[tt]=(tsArea[tt]||0)+b.L*b.W;});
   const userTs=Object.entries(tsArea).sort((a,b)=>b[1]-a[1]).map(e=>+e[0]);
   const cb={...base,matKey:S.mat,userBoards:boards,userTs,ceil:Math.max(1800,+S.ceil||2600),person:Math.max(30,+S.person||100),sf:Math.max(1,+S.sf||5),sfb:S.sfb||'MBS'};
-  BUYS.forEach(V=>{let r=null;try{r=V.fn(cb);}catch(e){r=null;} results.push(r?{...V,...r}:{...V,none:true});});
+  BUYS.forEach(V=>{let r=null;const fit=FIT[V.id],vc={...cb,fit,Wmax:fitN(fit&&fit.w)||cb.Wmax,Hmax:fitN(fit&&fit.h)||cb.Hmax};try{r=V.fn(vc);}catch(e){r=null;} results.push(r?{...V,...r}:{...V,none:true});});
   return {boards,use,skip,t,Lmax,k,warns,results,base};
 }
 function finalize(d,boards,k){
@@ -3624,7 +3640,9 @@ function run(){
   $('#srcChips').innerHTML=[['all','All designs'],['own','From my boards'],['buy','Buy & build'],['pro','Pro / hard builds']].map(([id,nm])=>{const n=PLAN.results.filter(r=>!r.none&&(id==='all'||srcOf(r)===id)).length,t=PLAN.results.filter(r=>id==='all'||srcOf(r)===id).length;return `<button class="chip" type="button" data-src="${id}" aria-pressed="${id===src}">${nm}<span class="ct">${n}/${t}</span></button>`;}).join('');
   $('#f-sort').value=srt;$('#f-q').value=S.q||'';
   const shownOk=shown.filter(r=>!r.none), topA=shownOk.length?Math.max(...shownOk.map(r=>r.area)):0, topY=shownOk.length?Math.max(...shownOk.map(r=>r.yield)):0;
-  if(!selected||!shown.find(r=>r.id===selected&&!r.none)) selected=(shown.find(r=>!r.none)||{}).id||null;
+  /* a resized design that cannot be built stays selected, so its Reset button can show */
+  const keepFit=!!(selected&&S.fit&&S.fit[selected]&&PLAN.results.some(r=>r.id===selected&&r.none));
+  if(!keepFit&&(!selected||!shown.find(r=>r.id===selected&&!r.none))) selected=(shown.find(r=>!r.none)||{}).id||null;
   const catName=id=>(CATS.find(k=>k.id===id)||{}).name||'';
   const cardHtml=r=>{
     if(r.none) return `<div class="card none" aria-disabled="true"><div class="thumb"><span class="hint">${r.mode==='buy'?"Doesn't fit this room":"Doesn't fit this stock"}</span></div><div class="cat${r.cat==='wtf'?' wtf':''}">${catName(r.cat)}</div><div class="nm">${r.name}</div><div class="pl">${r.place}</div></div>`;
@@ -3642,9 +3660,20 @@ function run(){
   drawCards(false);
   renderDetail();
 }
+/* a resized design the checks reject: say so and offer a reset */
+function cantBuild(d){
+  const f=S.fit[d.id], dd=(window._bspDefaultDims||{})[d.id]||{};
+  const tg=['w','h','d'].map(k=>f[k]||dd[k]||'—').join(' × ');
+  $('#detail').innerHTML=`<article class="detail"><div class="dhead"><div><h2>${esc(d.name)}</h2><p class="hint">${esc(d.place||'')}</p></div></div>
+    <div class="warn" role="alert">Can't build <i>${esc(d.name)}</i> at this size.</div>
+    <p class="hint">Target ${tg} mm. Try a smaller size or a shallower depth, or reset to the default size.</p>
+    <div class="btns"><button type="button" class="b p" id="fitReset">Reset to default size</button></div></article>`;
+  $('#fitReset').addEventListener('click',()=>{if(S.fit) delete S.fit[d.id]; save(); run();});
+}
 function renderDetail(){
   const d=PLAN.results.find(r=>r.id===selected);
   if(!d){$('#detail').innerHTML=`<div class="detail"><p class="empty">None of the designs ${(S.cat||'all')==='all'?'':'in this style '}fit this stock. Check the dimensions, lower the min shelf depth, or try another style.</p></div>`;return;}
+  if(d.none&&S.fit&&S.fit[d.id]){cantBuild(d);return;}
   if(d.mode==='buy'){renderDetailBuy(d);return;}
   const parts={};
   d.cuts.forEach(c=>{const key=c.label+'|'+Math.round(c.len)+'|'+Math.round(c.w);(parts[key]=parts[key]||{label:c.label,len:Math.round(c.len),w:Math.round(c.w),n:0}).n++;});
@@ -3765,7 +3794,7 @@ window.bspUse=name=>{try{return (window.claude&&window.claude.use)?Promise.resol
 window.bspApi={get PLAN(){return PLAN;},get S(){return S;},get selected(){return selected;},select(id){selected=id;run();},run:()=>run(),save:()=>save(),esc,fmt,renderScene,shopRows,manualParts,G};
 const _bspRenderDetail=renderDetail;
 renderDetail=function(){_bspRenderDetail();const d=PLAN&&PLAN.results.find(r=>r.id===selected);const el=document.querySelector('#detail .detail');
-  if(d&&el) window.bspDetailHooks.forEach(fn=>{try{fn(d,el);}catch(e){console.error(e);}});};
+  if(d&&el&&!d.none) window.bspDetailHooks.forEach(fn=>{try{fn(d,el);}catch(e){console.error(e);}});};
 run();
 </script>
 
@@ -4341,7 +4370,7 @@ const st={db:null,user:null,comments:null,owner:false,pending:true,preview:false
 
 const snapSettings=()=>{const S=window.bspApi.S,o={};KEYS.forEach(k=>{if(S[k]!==undefined)o[k]=S[k];});return JSON.parse(JSON.stringify(o));};
 const clean=(id,v)=>(v&&typeof v==='object'&&v.settings&&Array.isArray(v.settings.stock))
-  ?{designId:String(v.designId||id),name:String(v.name||id),note:String(v.note||''),settings:v.settings,sharedAt:String(v.sharedAt||'')}:null;
+  ?{designId:String(v.designId||id),name:String(v.name||id),note:String(v.note||''),settings:v.settings,fit:(v.fit&&typeof v.fit==='object')?v.fit:null,sharedAt:String(v.sharedAt||'')}:null;
 const cleanAll=m=>{const o={};Object.keys(m||{}).forEach(k=>{const c=clean(k,m[k]);if(c)o[k]=c;});return o;};
 function localRead(){try{const v=JSON.parse(localStorage.getItem(LS)||'{}');return v&&typeof v==='object'?v:{};}catch(e){return {};}}
 function localWrite(m){try{localStorage.setItem(LS,JSON.stringify(m));return true;}catch(e){return false;}}
@@ -4378,7 +4407,7 @@ function shareRow(d,el){
       if(sh){ await store(d.id,null); }
       else{
         const inp=row.querySelector('input'), note=(inp?inp.value:'').trim().slice(0,300);
-        await store(d.id,{designId:d.id,name:String(d.name||d.id),note,settings:snapSettings(),sharedAt:new Date().toISOString()});
+        await store(d.id,{designId:d.id,name:String(d.name||d.id),note,settings:snapSettings(),fit:(window.bspApi.S.fit&&window.bspApi.S.fit[d.id])||null,sharedAt:new Date().toISOString()});
         delete st.drafts[d.id];
       }
       refresh();
@@ -4407,8 +4436,8 @@ function renderGallery(){
   const head=`<div class="bsp-head"><h2>${st.owner?'Client preview':'Designs for you'}</h2><p class="hint">${st.owner?'This is what your client sees. Use Client view in the header to go back.':'Pick the ones you like, and leave a comment on each.'}</p></div>`;
   if(!list.length){ g.innerHTML=head+'<p class="bsp-wait">Nothing is shared yet. Open a design and choose Share with client.</p>'; return; }
   const cards=list.map(s=>{
-    const key=JSON.stringify(s.settings); let R=st.cache.get(key);
-    if(!R){ R=new Map(); try{ window.planAll(s.settings).results.forEach(r=>R.set(r.id,r)); }catch(e){} st.cache.set(key,R); }
+    const key=JSON.stringify([s.settings,s.fit||null]); let R=st.cache.get(key);
+    if(!R){ R=new Map(); try{ window.planAll({...s.settings,fit:s.fit?{[s.designId]:s.fit}:{}}).results.forEach(r=>R.set(r.id,r)); }catch(e){} st.cache.set(key,R); }
     return card(s,R.get(s.designId));
   }).join('');
   g.innerHTML=head+`<div class="bsp-grid">${cards}</div>`;
@@ -4470,5 +4499,80 @@ boot().catch(e=>console.error(e));
 })();
 </script>
 <!-- ===== end of slot C ===== -->
+<!-- ===== feature slot D: resize one design. Only edit between the two tags below. ===== -->
+<style id="feat-size-css">
+.bsp-size{margin:14px 0 0;padding:12px;border:1px solid var(--line);border-radius:var(--radius-s);background:var(--panel-2)}
+.bsp-size h3{margin:0 0 8px;font-size:15px}
+.bsp-size-row{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.bsp-size label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);min-width:0}
+.bsp-size input[type=number]{min-height:44px;font:inherit;font-size:16px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-s);background:var(--bg);color:var(--ink);width:112px;box-sizing:border-box}
+.bsp-size label.bsp-pct{flex:1 1 100%}
+.bsp-size input[type=range]{width:100%;min-height:44px;margin:0}
+.bsp-size .bsp-btns{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}
+.bsp-size .b{min-height:44px}
+.bsp-size .bsp-line{margin:10px 0 0;font-size:13px;color:var(--muted)}
+.bsp-size .bsp-warn{margin:6px 0 0;font-size:13px;color:var(--muted);border-left:3px solid var(--accent);padding-left:8px}
+.bsp-size .bsp-msg{font-size:13px;color:var(--muted);width:100%;margin:6px 0 0}
+@media (max-width:900px){.bsp-size input[type=number]{width:100%}.bsp-size-row>label:not(.bsp-pct){flex:1 1 100%}}
+</style>
+<script id="feat-size">
+/* Resize one design. The logic side (fitOver, planAll) re-checks the design at the new size;
+   this panel only sets S.fit[id] = {w,h,d} and runs the planner again. */
+(()=>{
+const DKEYS=['stock','wallW','maxH','gap','minD','kerf','mat','load','ceil','person','sf','sfb'];
+const esc=s=>window.bspApi.esc(s==null?'':s);
+const LBL={w:'Width',h:'Height',d:'Depth'};
+
+/* default (no-fit) overall size of a design. Kept in window._bspDefaultDims and refreshed when stock or settings change. */
+function refDims(d){
+  const S=window.bspApi.S, key=JSON.stringify(DKEYS.map(k=>S[k]));
+  if(window._bspDefKey!==key||!window._bspDefaultDims){window._bspDefKey=key;window._bspDefaultDims={};}
+  const cache=window._bspDefaultDims;
+  if(!(S.fit&&S.fit[d.id])){ if(d.dims) cache[d.id]=d.dims; return cache[d.id]||null; }
+  if(!cache[d.id]){ try{ planAll({...S,fit:{}}).results.forEach(r=>{if(!r.none&&r.dims) cache[r.id]=r.dims;}); }catch(e){console.error(e);} }
+  return cache[d.id]||null;
+}
+const dimStr=o=>['w','h','d'].map(k=>(o&&o[k]!=null)?o[k]:'—').join(' × ');
+
+function mountSize(d,el){
+  el.querySelectorAll(':scope > .bsp-size').forEach(n=>n.remove());
+  const sc=el.querySelector('.scene'); if(!sc) return;
+  const S=window.bspApi.S, fit=S.fit&&S.fit[d.id]?S.fit[d.id]:null, def=refDims(d); if(!def) return;
+  const cur=fit||{w:def.w,h:def.h,d:def.d};
+  const built=d.dims, far=!!(fit&&built&&['w','h','d'].some(k=>fit[k]&&Math.abs(built[k]-fit[k])/fit[k]>0.05));
+  const sec=document.createElement('section'); sec.className='bsp-size'; sec.setAttribute('aria-label','Size');
+  sec.innerHTML=`<h3>Size</h3>
+    <div class="bsp-size-row">
+      <label class="bsp-pct">Scale <span data-pct-out>100 %</span>
+        <input type="range" min="50" max="200" step="5" value="100" data-pct aria-label="Scale in percent"></label>
+      ${['w','h','d'].map(k=>`<label>${LBL[k]} (mm)<input type="number" inputmode="numeric" min="1" step="1" data-k="${k}" value="${cur[k]}" aria-label="${LBL[k]} in mm"></label>`).join('')}
+    </div>
+    <div class="bsp-btns"><button type="button" class="b p bsp-tap" data-apply>Apply</button><button type="button" class="b bsp-tap" data-reset>Reset to default size</button></div>
+    <p class="bsp-msg" role="status"></p>
+    ${fit&&built?`<p class="bsp-line">Target ${esc(dimStr(fit))} mm → built ${esc(dimStr(built))} mm</p>`:''}
+    ${far?'<p class="bsp-warn">This is the nearest size that passes the checks.</p>':''}`;
+  const inp={}; sec.querySelectorAll('input[data-k]').forEach(i=>inp[i.dataset.k]=i);
+  const msg=sec.querySelector('.bsp-msg'), slider=sec.querySelector('[data-pct]'), out=sec.querySelector('[data-pct-out]');
+  slider.addEventListener('input',()=>{
+    const p=+slider.value; out.textContent=p+' %';
+    ['w','h','d'].forEach(k=>{inp[k].value=Math.round(def[k]*p/100);});
+  });
+  sec.querySelector('[data-apply]').addEventListener('click',()=>{
+    const v={}; let bad=false;
+    ['w','h','d'].forEach(k=>{const n=Math.round(+inp[k].value); if(!(n>0)) bad=true; v[k]=n;});
+    if(bad){ msg.textContent='Enter each size as a number of mm above zero.'; return; }
+    const SS=window.bspApi.S; SS.fit=SS.fit||{}; SS.fit[d.id]=v;
+    window.bspApi.save(); window.bspApi.run();
+  });
+  sec.querySelector('[data-reset]').addEventListener('click',()=>{
+    const SS=window.bspApi.S; if(SS.fit) delete SS.fit[d.id];
+    window.bspApi.save(); window.bspApi.run();
+  });
+  sc.insertAdjacentElement('afterend',sec);
+}
+window.bspDetailHooks.push((d,el)=>{try{mountSize(d,el);}catch(e){console.error(e);}});
+})();
+</script>
+<!-- ===== end of slot D ===== -->
 
 </body></html>

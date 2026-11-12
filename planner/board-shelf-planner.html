@@ -1436,6 +1436,9 @@ const sn=(v,one,many)=>v===1?one:many;
 
 /* ---------- four-leg table with aprons: coffee, side, dining, bench, stool... ---------- */
 function legTable(st,c,o){
+  /* a resized own-board table/bench/stool: the fitted size replaces the generator's own caps */
+  if(c.fit){o={...o}; const w=fitN(c.fit.w), d=fitN(c.fit.d), h=fitN(c.fit.h);
+    if(w){o.Lcap=w; o.Lmin=Math.min(o.Lmin||400,w); if(w>(o.Lcap0||0)) o.ah=Math.max(o.ah||70,Math.min(140,Math.round(w/12)));} if(d){o.wMax=d; o.wMin=Math.min(o.wMin||0,d);} if(h) o.H=h;}
   const D=dStrips(st); if(!D.length||o.H>c.Hmax) return null;
   const t=c.t, lw=o.lw||LEGW, ov=o.ov==null?40:o.ov, ah=o.ah||70, H=o.H, fh=o.fh||0, mx=Math.min(maxLen(D),c.Wmax,o.Lcap||9999), cands=[];
   for(let m=o.mMin||1;m<=(o.mMax||6);m++){
@@ -1444,6 +1447,7 @@ function legTable(st,c,o){
     const Lsp=o.P?spanPt(c,I,o.P):spanUdl(c,I,Wd,o.q);
     let hi=floorTo(Math.min(mx,Lsp),50), lo=o.Lmin||400;
     if(o.sq){lo=Math.max(lo,ceilTo(Wd-50,50));hi=Math.min(hi,floorTo(Wd,50));}
+    if(c.fit&&fitN(c.fit.w)) lo=Math.max(lo,hi-100); /* a requested width: stay as close to it as the checks allow */
     for(let L=hi;L>=lo;L-=50){
       if(L-2*ov-2*lw<60) continue;
       const k=o.shelf?Math.floor((Wd-2*ov-4*t)/c.D):0, sh=!!(o.shelf&&k>=1&&L-2*ov<=c.Lmax);
@@ -3376,7 +3380,7 @@ function planAll(S){
   const results=GENS.map(G=>{
     let best=null;
     /* a resized design: its own width/height limits, and only depths up to the fitted depth */
-    const fit=FIT[G.id]||{}, gb={...base,Wmax:fitN(fit.w)||base.Wmax,Hmax:fitN(fit.h)||base.Hmax}, fd=fitN(fit.d), all=[...ds];
+    const fit=FIT[G.id]||{}, gb={...base,Wmax:fitN(fit.w)||base.Wmax,Hmax:fitN(fit.h)||base.Hmax,fit:FIT[G.id]}, fd=fitN(fit.d), all=[...ds];
     const dset=fd==null?all:(all.some(D=>D<=fd)?all.filter(D=>D<=fd):(all.length?[Math.min(...all)]:[]));
     dset.forEach(D=>{const c={...gb,D};let r=null;try{r=G.fn(stripsBy[D],c);}catch(e){r=null;}
       if(r&&r.area>0&&(!best||r.area>best.area+1)) best={...r,D,ctx:c};});

@@ -3917,6 +3917,8 @@ const emptyPrices=()=>({items:{},meta:{ts:0}});
 
 /* ---- state ---- */
 const cache={prices:null,settings:null,signoffs:{},shares:{}};
+const PERMANENT=['not_granted','capability_disabled','capability_removed','revoked','permission_denied','not_writer','invalid_argument','transform_error','quota_exceeded'];
+const rejected={};
 let outbox=[], mode='starting', db=null, base='', flushing=false, readyDone=false, readyTimer=0, stTimer=0;
 const listeners={}, firstAnswer={};
 let readyResolve, openResolve;
@@ -4055,7 +4057,14 @@ async function flush(){
   try{
     while(outbox.length){
       const e=outbox[0];
-      try{ await writeRemote(e); }catch(err){ break; }
+      let failure=null;
+      try{ await writeRemote(e); }catch(err){ failure=err||{}; }
+      if(failure){
+        /* a refusal that retrying cannot fix: drop the entry, keep the local copy, show "This device only" */
+        if(PERMANENT.indexOf(failure.code)>=0){ rejected[e.kind]=true; const j=outbox.indexOf(e); if(j>=0){ outbox.splice(j,1); persist(); } statusChanged(); continue; }
+        break;   /* network or unavailable: keep it queued and retry later */
+      }
+      rejected[e.kind]=false;
       const i=outbox.indexOf(e); if(i>=0){ outbox.splice(i,1); persist(); }
       statusChanged();
     }
@@ -4128,7 +4137,9 @@ let pill=null, panel=null, msgEl=null;
 function statusText(){
   if(mode==='local') return 'This device only';
   if(!readyDone) return 'Connecting…';
-  return outbox.length?`Offline: ${outbox.length} change${outbox.length===1?'':'s'} waiting`:'Saved online';
+  if(outbox.length) return `Offline: ${outbox.length} change${outbox.length===1?'':'s'} waiting`;
+  if(Object.keys(rejected).some(k=>rejected[k])) return 'This device only';
+  return 'Saved online';
 }
 function paint(){
   if(!pill) return;

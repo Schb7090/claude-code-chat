@@ -4020,8 +4020,282 @@ load().catch(()=>{});
 <!-- (spacer) -->
 <!-- (spacer) -->
 <!-- ===== feature slot B: rigging sign-off record. Only edit between the two tags below. ===== -->
-<style id="feat-signoff-css"></style>
-<script id="feat-signoff"></script>
+<style id="feat-signoff-css">
+#signoff-sec .so-body{gap:12px}
+#signoff-sec .so-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:10px}
+@media (min-width:600px){#signoff-sec .so-grid.two{grid-template-columns:repeat(2,minmax(0,1fr))}}
+#signoff-sec label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted);min-width:0}
+#signoff-sec label.so-check{flex-direction:row;align-items:center;gap:10px;color:var(--ink);font-size:14px;min-height:44px}
+#signoff-sec input,#signoff-sec select,#signoff-sec textarea{min-height:44px;font-size:16px}
+#signoff-sec input[readonly]{background:var(--panel-2);color:var(--muted)}
+#signoff-sec input[type=checkbox]{width:22px;height:22px;min-height:0;flex:0 0 auto;accent-color:var(--accent)}
+#signoff-sec input[type=file]{padding:8px 0;border:none;background:none}
+#signoff-sec button.b{min-height:44px}
+#signoff-sec button.b:disabled{opacity:.45;cursor:not-allowed}
+#signoff-sec .so-anchor{border:1px solid var(--line);border-left:4px solid var(--line);border-radius:var(--radius-s);padding:10px;display:flex;flex-direction:column;gap:8px;background:var(--panel-2);min-width:0}
+#signoff-sec .so-anchor.fail{border-left-color:var(--accent)}
+#signoff-sec .so-anchor.pass{border-left-color:var(--good)}
+#signoff-sec .so-st{font-size:14px;font-weight:600;color:var(--muted)}
+#signoff-sec .so-st.fail{color:var(--accent)}
+#signoff-sec .so-st.pass{color:var(--good)}
+#signoff-sec .so-status{font-size:14px;border-left:3px solid var(--warn);padding:6px 10px;background:var(--panel)}
+#signoff-sec .so-status.fail{border-left-color:var(--accent);color:var(--ink)}
+#signoff-sec .so-status.ok{border-left-color:var(--good)}
+#signoff-sec .so-list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px}
+#signoff-sec .so-list button{width:100%;text-align:left;font-size:13px;line-height:1.35;padding:8px 10px}
+#signoff-sec .so-view{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:10px}
+#signoff-sec .so-view h4{margin:0}
+#signoff-sec .so-photos{display:flex;gap:8px;flex-wrap:wrap}
+#signoff-sec .so-photos img{width:120px;height:120px;object-fit:cover;border-radius:6px;border:1px solid var(--line)}
+#signoff-sec .so-view .warn{font-size:14px}
+</style>
+<script id="feat-signoff">
+(()=>{
+const LS='bsp-signoffs', SUBST=['concrete','brick','timber joist','steel','other'];
+const drafts={}; let svc=null, svcP=null, sub=null, viewId=null, curD=null, curSec=null, secOpen=true;
+const esc=s=>window.bspApi.esc(s==null?'':s);
+const S=()=>svc||{db:null,user:null,assets:null,dl:null};
+const getSvc=()=>svcP||(svcP=Promise.all(['db','user','assets','downloads'].map(n=>Promise.resolve().then(()=>window.bspUse(n)).catch(()=>null)))
+  .then(a=>(svc={db:a[0],user:a[1],assets:a[2],dl:a[3]})));
+const today=()=>{const t=new Date(),p=n=>String(n).padStart(2,'0');return `${t.getFullYear()}-${p(t.getMonth()+1)}-${p(t.getDate())}`;};
+// one row per anchor; required = 1.5 x F (N), rounded UP to 0.01 kN so the number shown is the one tested against
+const anchorsOf=d=>{const out=[];(d.rig.items||[]).forEach(i=>{if(i.kind!=='anchor')return;const req=Math.ceil(Math.round(i.F*1.5)/10)/100;for(let k=0;k<Math.max(1,i.n||1);k++)out.push({comp:i.comp,req});});return out;};
+function draftFor(d){
+  const anc=anchorsOf(d);
+  let dr=drafts[d.id];
+  if(!dr||dr.anchors.length!==anc.length){
+    dr=drafts[d.id]={job:'',location:'',date:today(),installerName:'',notes:'',checks:[],
+      anchors:anc.map(a=>({type:a.comp,substrate:'concrete',reached:'',photoId:null,busy:false}))};
+  }
+  while(dr.checks.length<d.rig.check.length)dr.checks.push(false);
+  dr.checks.length=d.rig.check.length;
+  return dr;
+}
+function gate(d){
+  const dr=draftFor(d),anc=anchorsOf(d),fails=[],todo=[];
+  anc.forEach((a,i)=>{const v=dr.anchors[i].reached;
+    if(v===''||v==null||!isFinite(Number(v))||Number(v)<0)todo.push(i);
+    else if(Number(v)<a.req)fails.push(i);});
+  const checksLeft=dr.checks.filter(x=>!x).length, busy=dr.anchors.some(a=>a.busy);
+  return {dr,anc,fails,todo,checksLeft,busy,ok:anc.length>0&&!fails.length&&!todo.length&&!checksLeft&&!busy};
+}
+/* ---- storage ---- */
+function loadLocal(){try{const a=JSON.parse(localStorage.getItem(LS)||'[]');return Array.isArray(a)?a:[];}catch(e){return [];}}
+function saveLocal(a){try{localStorage.setItem(LS,JSON.stringify(a));return true;}catch(e){return false;}}
+function dropSub(){if(!sub)return;clearTimeout(sub.timer);try{if(sub.unsub)sub.unsub();}catch(e){}sub=null;viewId=null;}
+function ensureSub(d){
+  if(sub&&sub.designId===d.id)return;
+  dropSub();
+  const s=sub={designId:d.id,records:[],status:'loading',unsub:null,timer:null};
+  getSvc().then(()=>{
+    if(sub!==s)return;
+    const db=svc.db;
+    if(!db){s.status='local';s.records=loadLocal().filter(r=>r.designId===s.designId);renderHistory();return;}
+    s.timer=setTimeout(()=>{if(sub===s&&s.status==='loading'){s.status='error';renderHistory();}},10000);
+    try{
+      s.unsub=db.collection('signoffs').where('designId','==',s.designId).onSnapshot(snap=>{
+        if(sub!==s)return;clearTimeout(s.timer);
+        s.records=snap.docs.map(x=>Object.assign({id:x.id},x.data()||{}));
+        s.status='ok';renderHistory();
+      },()=>{if(sub!==s)return;clearTimeout(s.timer);s.status='error';renderHistory();});
+    }catch(e){clearTimeout(s.timer);s.status='error';renderHistory();}
+  });
+}
+/* ---- rendering ---- */
+function anchorRow(a,i,ad,hasAssets){
+  const opts=SUBST.map(x=>`<option value="${esc(x)}"${x===ad.substrate?' selected':''}>${esc(x)}</option>`).join('');
+  return `<div class="so-anchor" data-row="${i}">
+    <div><b>Anchor ${i+1}</b> <span class="hint">${esc(a.comp)}</span></div>
+    <div class="so-grid two">
+      <label>Anchor type<input type="text" data-i="${i}" data-f="type" value="${esc(ad.type)}" autocomplete="off"></label>
+      <label>Substrate<select data-i="${i}" data-f="substrate">${opts}</select></label>
+      <label>Required proof load, kN (1.5 × F)<input type="text" readonly value="${a.req.toFixed(2)}"></label>
+      <label>Proof load reached, kN<input type="number" inputmode="decimal" min="0" step="0.01" data-i="${i}" data-f="reached" value="${esc(ad.reached)}"></label>
+    </div>
+    <div class="so-st" data-st="${i}"></div>
+    ${hasAssets?`<label>Photo (optional)<input type="file" accept="image/*" capture="environment" data-i="${i}" data-f="photo"></label><div class="hint so-pst">${ad.photoId?'Photo attached.':''}</div>`:''}
+  </div>`;
+}
+function build(){
+  const d=curD, sec=curSec; if(!d||!sec)return;
+  const s=S(), dr=draftFor(d), anc=anchorsOf(d);
+  sec.querySelector('.so-body').innerHTML=`
+    <div class="warn life"><b>Life-safety sign-off.</b> Record this only after every anchor has been proof-loaded on site. An anchor that fails must not carry load. A competent person must still check the anchors, the structure and the finished installation before use.</div>
+    <h4>New record</h4>
+    <div class="so-grid two">
+      <label>Job / client name<input type="text" data-k="job" value="${esc(dr.job)}" autocomplete="off"></label>
+      <label>Location<input type="text" data-k="location" value="${esc(dr.location)}" autocomplete="off"></label>
+      <label>Date<input type="date" data-k="date" value="${esc(dr.date)}"></label>
+      <label>Installer name<input type="text" data-k="installerName" value="${esc(dr.installerName)}" autocomplete="name"></label>
+    </div>
+    <h4>Anchors</h4>
+    ${anc.length?`<p class="hint">Enter the proof load reached in each test. Anchors below the required value must not be used.</p>`:`<p class="hint">This design has no anchor components to proof-load.</p>`}
+    <div class="so-grid">${anc.map((a,i)=>anchorRow(a,i,dr.anchors[i],!!s.assets)).join('')}</div>
+    <label>Notes<textarea rows="3" data-k="notes">${esc(dr.notes)}</textarea></label>
+    <h4>Checks (tick every one)</h4>
+    <div class="so-grid">${d.rig.check.map((c,i)=>`<label class="so-check"><input type="checkbox" data-chk="${i}"${dr.checks[i]?' checked':''}><span>${esc(c)}</span></label>`).join('')}</div>
+    <div class="so-status" role="status" aria-live="polite"></div>
+    ${s.db?'':'<p class="hint">Saved on this device only.</p>'}
+    <div class="btns"><button class="b p" type="button" id="so-save">Save sign-off record</button><span class="toast so-fmsg"></span></div>
+    <h4>History</h4>
+    <div class="so-hist"></div>`;
+  refresh(); renderHistory();
+}
+function refresh(){
+  const d=curD, sec=curSec; if(!d||!sec||!sec.isConnected)return;
+  const g=gate(d);
+  g.anc.forEach((a,i)=>{
+    const row=sec.querySelector(`.so-anchor[data-row="${i}"]`); if(!row)return;
+    const v=g.dr.anchors[i].reached, failed=g.fails.includes(i), passed=!failed&&!g.todo.includes(i), st=row.querySelector('.so-st');
+    row.classList.toggle('fail',failed); row.classList.toggle('pass',passed);
+    st.className='so-st'+(failed?' fail':passed?' pass':'');
+    st.textContent=failed?`FAIL: ${Number(v).toFixed(2)} kN is below the required ${a.req.toFixed(2)} kN. Do not use this anchor.`:passed?'PASS: reached the required proof load.':'Not tested yet.';
+  });
+  const box=sec.querySelector('.so-status');
+  let cls='', txt='';
+  if(!g.anc.length){cls='fail';txt='No anchor components in this design, so a sign-off cannot be recorded for it.';}
+  else if(g.fails.length){cls='fail';const nm=g.fails.map(i=>`${i+1} (${g.dr.anchors[i].type||g.anc[i].comp})`).join(', ');
+    txt=`${g.fails.length} of ${g.anc.length} anchor${g.anc.length>1?'s':''} below the required proof load: ${nm}. Do not hang anything from ${g.fails.length>1?'them':'it'}. Save is disabled.`;}
+  else if(g.todo.length){txt=`${g.todo.length} anchor${g.todo.length>1?'s':''} not tested yet. Save is disabled until every anchor has a proof-load value.`;}
+  else if(g.checksLeft){txt=`${g.checksLeft} check${g.checksLeft>1?'s':''} not ticked. Save is disabled until every check is ticked.`;}
+  else if(g.busy){txt='Wait for the photo upload to finish. Save is disabled until then.';}
+  else {cls='ok';txt='Every anchor reached its required proof load and every check is ticked. You can save the record. A competent person must still check the installation before use.';}
+  if(box){box.className='so-status'+(cls?' '+cls:'');box.textContent=txt;}
+  const save=sec.querySelector('#so-save'); if(save)save.disabled=!g.ok;
+}
+function renderHistory(){
+  const sec=curSec; if(!sec||!sec.isConnected||!sub)return;
+  const box=sec.querySelector('.so-hist'); if(!box)return;
+  const s=sub;
+  if(s.status==='error'){box.innerHTML='<div class="warn"><b>Records unavailable.</b> The record store did not answer. Do not assume an earlier sign-off exists: check the paper or device copy, then reload.</div>';return;}
+  if(s.status==='loading'){box.innerHTML='<p class="hint">Loading records…</p>';return;}
+  const recs=s.records.slice().sort((a,b)=>String(b.createdAt||'').localeCompare(String(a.createdAt||'')));
+  if(!recs.length){box.innerHTML='<p class="hint">No sign-offs saved for this design yet.</p>';return;}
+  const list=`<ul class="so-list">${recs.map(r=>{const an=r.anchors||[],p=an.filter(a=>a.pass).length;
+    return `<li><button class="b so-open" type="button" data-id="${esc(r.id)}" aria-pressed="${viewId===r.id}">${esc(r.date||'no date')} · ${esc(r.job||'no job name')} · ${esc(r.installerName||'no installer')} · ${p} of ${an.length} anchors pass</button></li>`;}).join('')}</ul>`;
+  const v=viewId&&recs.find(r=>r.id===viewId);
+  box.innerHTML=list+(v?viewHtml(v):'');
+}
+function viewHtml(r){
+  const an=r.anchors||[], allOk=an.length>0&&an.every(a=>a.pass), s=S();
+  const rows=an.map(a=>`<tr><td>${esc(a.n)}</td><td>${esc(a.type)}</td><td>${esc(a.substrate)}</td><td class="n">${Number(a.requiredKN).toFixed(2)}</td><td class="n">${Number(a.reachedKN).toFixed(2)}</td><td>${a.pass?'Pass':'<b>FAIL: do not use</b>'}</td></tr>`).join('');
+  const photos=an.filter(a=>a.photoId).map(a=>s.assets?`<img src="/_blob/${esc(a.photoId)}" alt="Anchor ${esc(a.n)} photo" loading="lazy">`:`<span class="hint">Photo on file for anchor ${esc(a.n)}</span>`).join('');
+  return `<div class="so-view">
+    <h4>${esc(r.job||'No job name')}</h4>
+    <p class="hint">${esc([r.location,r.date].filter(Boolean).join(' · '))} · installer: ${esc(r.installerName||'not given')} · record ${esc(r.id)}</p>
+    <div class="tbl-wrap"><table class="parts"><thead><tr><th>#</th><th>Anchor type</th><th>Substrate</th><th class="n">Required kN</th><th class="n">Reached kN</th><th>Result</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${allOk?'<p class="hint">Every anchor reached its required proof load when this record was saved.</p>':'<div class="warn"><b>Not all anchors passed.</b> Do not use the failed anchors.</div>'}
+    ${photos?`<div class="so-photos">${photos}</div>`:''}
+    ${r.notes?`<p>${esc(r.notes)}</p>`:''}
+    <div class="btns"><button class="b so-close" type="button">Close record</button>${s.dl?'<button class="b p so-dl" type="button">Download record</button>':''}<span class="toast so-vmsg"></span></div>
+  </div>`;
+}
+function recordHtml(r){
+  const e=esc, an=r.anchors||[], allOk=an.length>0&&an.every(a=>a.pass);
+  const rows=an.map(a=>`<tr><td>${e(a.n)}</td><td>${e(a.type)}</td><td>${e(a.substrate)}</td><td class="n">${Number(a.requiredKN).toFixed(2)}</td><td class="n">${Number(a.reachedKN).toFixed(2)}</td><td>${a.pass?'PASS':'<b>FAIL: do not use</b>'}</td><td>${a.photoId?'Photo ref '+e(a.photoId):'none'}</td></tr>`).join('');
+  const checks=(r.checks||[]).map(c=>`<li>[ticked] ${e(c)}</li>`).join('');
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Install sign-off: ${e(r.designName)}</title>
+<style>body{font-family:system-ui,sans-serif;color:#222;margin:24px;max-width:860px;font-size:14px;line-height:1.4}table{border-collapse:collapse;width:100%;margin:8px 0}td,th{border:1px solid #bbb;padding:5px 6px;text-align:left;vertical-align:top}th{background:#eee}.n{text-align:right}h1{font-size:20px;margin:0 0 4px}h2{font-size:15px;margin:16px 0 4px}.warn{border-left:4px solid #8C5F1C;padding:6px 10px;background:#f6f1ea;margin:12px 0}@media print{body{margin:10mm}}</style></head><body>
+<h1>Rigging install sign-off</h1>
+<p>${e(r.designName)} · record ${e(r.id)} · saved ${e(r.createdAt)}</p>
+<table><tr><th>Job / client</th><td>${e(r.job)}</td><th>Date</th><td>${e(r.date)}</td></tr><tr><th>Location</th><td>${e(r.location)}</td><th>Installer</th><td>${e(r.installerName)}</td></tr></table>
+<h2>Anchor proof-load tests</h2>
+<table><tr><th>#</th><th>Anchor type</th><th>Substrate</th><th class="n">Required kN</th><th class="n">Reached kN</th><th>Result</th><th>Photo</th></tr>${rows}</table>
+<p><b>${allOk?'All anchors reached the required proof load.':'Not all anchors passed. Do not use the failed anchors.'}</b></p>
+<h2>Checks</h2><ul>${checks}</ul>
+${r.notes?`<h2>Notes</h2><p>${e(r.notes)}</p>`:''}
+<div class="warn">Record of proof-load tests and checks. This is not a certificate. The structure, the anchors and the finished installation must be checked and signed off by a competent person before use.</div>
+</body></html>`;
+}
+/* ---- actions ---- */
+async function saveRecord(){
+  if(!curD||!curSec)return;
+  if(!gate(curD).ok){refresh();return;}
+  await getSvc();
+  const d=curD, s=S(), g=gate(d), dr=g.dr;
+  const id=`${d.id}-${Date.now()}`;
+  const rec={designId:d.id,designName:d.name,job:dr.job.trim(),location:dr.location.trim(),date:dr.date||today(),
+    installerName:dr.installerName.trim(),installerId:null,
+    anchors:g.anc.map((a,i)=>{const ad=dr.anchors[i],v=Number(ad.reached);return {n:i+1,type:(ad.type||a.comp).trim(),substrate:ad.substrate,requiredKN:a.req,reachedKN:v,pass:v>=a.req,photoId:ad.photoId||null};}),
+    checks:d.rig.check.slice(),notes:dr.notes.trim(),createdAt:new Date().toISOString()};
+  try{if(s.user)rec.installerId=(await s.user.id())||null;}catch(e){}
+  const msg=t=>{const m=curSec&&curSec.querySelector('.so-fmsg');if(m)m.textContent=t;};
+  try{
+    if(s.db){await s.db.collection('signoffs').doc(id).set(rec);}
+    else{const all=loadLocal();all.push(Object.assign({id},rec));if(!saveLocal(all)){msg('Not saved: this device refused to store it. Download the record instead.');return;}}
+  }catch(e){msg('Not saved: the record store refused the write. Check your access and try again.');return;}
+  if(sub&&sub.designId===d.id&&!sub.records.some(r=>r.id===id))sub.records.push(Object.assign({id},rec));
+  // keep the job details for the next record, clear the test results
+  const keep={job:dr.job,location:dr.location,installerName:dr.installerName,date:dr.date};
+  delete drafts[d.id];
+  Object.assign(draftFor(d),keep);
+  viewId=id;
+  build();
+  const m=curSec&&curSec.querySelector('.so-fmsg');if(m)m.textContent='Saved. Shown below in History.';
+}
+async function downloadRec(){
+  const r=sub&&viewId&&sub.records.find(x=>x.id===viewId), s=S();
+  const msg=t=>{const m=curSec&&curSec.querySelector('.so-vmsg');if(m)m.textContent=t;};
+  if(!r||!s.dl)return;
+  const slug=t=>String(t||'record').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,40)||'record';
+  const filename=`signoff-${slug(r.job||r.designName)}-${String(r.date||'undated').replace(/[^0-9-]/g,'')||'undated'}.html`;
+  try{const res=await s.dl.save({filename,data:recordHtml(r)});msg(res&&res.status==='delivered'?'Record sent.':'Record saved.');}
+  catch(e){msg('Download was blocked or declined. Try again.');}
+}
+async function uploadPhoto(i,file){
+  const d=curD, s=S();
+  if(!d||!file||!s.assets)return;
+  const ad=draftFor(d).anchors[i]; if(!ad)return;
+  const pst=t=>{const el=curSec&&curSec.querySelector(`.so-anchor[data-row="${i}"] .so-pst`);if(el)el.textContent=t;};
+  ad.busy=true; refresh(); pst('Uploading photo…');
+  try{const res=await s.assets.upload(file);ad.photoId=res.id;pst('Photo attached.');}
+  catch(e){ad.photoId=null;pst('Photo not attached'+(e&&e.code?` (${e.code})`:'')+'. Try a smaller image.');}
+  finally{ad.busy=false;refresh();}
+}
+/* ---- events (one listener each, delegated, survive re-renders) ---- */
+const inSec=t=>t&&t.closest?t.closest('#signoff-sec'):null;
+document.addEventListener('input',e=>{
+  const t=e.target; if(!inSec(t)||!curD)return;
+  if(t.dataset.k){draftFor(curD)[t.dataset.k]=t.value;return;}
+  if(t.dataset.i!=null&&t.dataset.f&&t.dataset.f!=='photo'){draftFor(curD).anchors[+t.dataset.i][t.dataset.f]=t.value;refresh();}
+});
+document.addEventListener('change',e=>{
+  const t=e.target; if(!inSec(t)||!curD)return;
+  if(t.dataset.chk!=null){draftFor(curD).checks[+t.dataset.chk]=t.checked;refresh();return;}
+  if(t.dataset.k){draftFor(curD)[t.dataset.k]=t.value;return;}
+  if(t.dataset.f==='photo'){uploadPhoto(+t.dataset.i,t.files&&t.files[0]);return;}
+  if(t.dataset.i!=null&&t.dataset.f){draftFor(curD).anchors[+t.dataset.i][t.dataset.f]=t.value;refresh();}
+});
+document.addEventListener('click',e=>{
+  const t=e.target.closest&&e.target.closest('#signoff-sec button'); if(!t||!curD)return;
+  if(t.id==='so-save'){saveRecord();return;}
+  if(t.classList.contains('so-open')){viewId=viewId===t.dataset.id?null:t.dataset.id;renderHistory();return;}
+  if(t.classList.contains('so-close')){viewId=null;renderHistory();return;}
+  if(t.classList.contains('so-dl')){downloadRec();}
+});
+/* ---- mount after each detail render ---- */
+function mount(d,el){
+  if(!d||!el)return;
+  if(!d.rig){curD=null;curSec=null;dropSub();return;}
+  curD=d;
+  ensureSub(d);
+  const old=document.getElementById('signoff-sec'); if(old)old.remove();
+  const sec=document.createElement('details');
+  sec.className='dsec'; sec.id='signoff-sec'; sec.open=secOpen;
+  sec.innerHTML='<summary><h3>Install sign-off</h3></summary><div class="sec so-body"><p class="hint">Loading sign-off form…</p></div>';
+  sec.addEventListener('toggle',()=>{secOpen=sec.open;});
+  curSec=sec;
+  const rigSec=el.querySelector('.rig')?.closest('details');
+  if(rigSec&&rigSec.parentNode)rigSec.insertAdjacentElement('afterend',sec); else el.appendChild(sec);
+  getSvc().then(()=>{if(curSec===sec&&sec.isConnected)build();});
+}
+window.bspDetailHooks.push((d,el)=>{try{mount(d,el);}catch(e){console.error(e);}});
+try{
+  const P=window.bspApi.PLAN, d=P&&P.results.find(r=>r.id===window.bspApi.selected), el=document.querySelector('#detail .detail');
+  if(d&&el)mount(d,el);
+}catch(e){console.error(e);}
+})();
+</script>
 <!-- ===== end of slot B ===== -->
 <!-- (spacer) -->
 <!-- (spacer) -->

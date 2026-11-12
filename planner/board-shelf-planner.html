@@ -3770,8 +3770,252 @@ run();
 </script>
 
 <!-- ===== feature slot A: quote sheet. Only edit between the two tags below. ===== -->
-<style id="feat-quote-css"></style>
-<script id="feat-quote"></script>
+<style id="feat-quote-css">
+.qwrap{display:grid;gap:14px;min-width:0}
+.qwrap h4{margin:0 0 4px;font-size:14px;font-weight:600}
+.qwrap .hint{margin:0 0 4px}
+.qrows{display:grid;gap:8px}
+.qwrap .qrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(104px,132px);gap:6px 12px;align-items:center;margin:0}
+.qwrap .qrow>span{font-size:13px;min-width:0;overflow-wrap:anywhere}
+.qwrap .qrow small{display:block;color:var(--muted);font-size:12px}
+.qwrap input{font:inherit;font-size:16px;font-family:var(--f-mono);min-height:44px;width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-s);background:var(--panel);color:var(--ink);min-width:0}
+.qwrap input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.qwrap input.qh{width:96px}
+.qwrap .qclientrow{grid-template-columns:minmax(64px,120px) minmax(0,1fr)}
+.qtable{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.qtable table{margin:0}
+.qtable tr.stock td{color:var(--muted)}
+.qtable tr.grand th,.qtable tr.grand td{font-weight:600;color:var(--ink);border-top:2px solid var(--ink)}
+.qtable tbody.qsum th{font-weight:500}
+.qbtns{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.qwrap .qnote{margin:0;font-size:13px;color:var(--warn)}
+.qwrap .qnote[hidden]{display:none}
+</style>
+<script id="feat-quote">
+(function(){
+'use strict';
+const A=window.bspApi; if(!A||!window.bspDetailHooks) return;
+const esc=A.esc;
+const money=v=>Number(v).toLocaleString('en-GB',{maximumFractionDigits:2});
+const numOf=s=>{if(s==null)return null;const t=String(s).replace(/\s/g,'').replace(',','.');if(t==='')return null;const n=Number(t);return isFinite(n)?n:null;};
+const smName=m=>{try{return SM[m].n;}catch(e){return m;}};
+const prName=p=>{try{return PR[p].n;}catch(e){return p;}};
+const prLen=p=>{try{return PR[p].len;}catch(e){return '';}};
+const today=()=>new Date().toLocaleDateString('en-GB');
+const isoDay=()=>new Date().toISOString().slice(0,10);
+const sizeText=d=>d.dims?`${d.dims.w} × ${d.dims.h} × ${d.dims.d} mm (W × H × D)`:(d.D?`${d.D} mm deep`:'');
+const row=(a,b)=>`<label class="qrow">${a}${b}</label>`;
+
+/* ---- prices: one object for the viewer, every price ever entered is kept ---- */
+function norm(o){
+  o=o&&typeof o==='object'&&!Array.isArray(o)?o:{};
+  const s=(x,dflt='')=>typeof x==='string'?x:(typeof x==='number'?String(x):dflt);
+  const m=x=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.entries(x).filter(([k,v])=>typeof v==='string')):{};
+  return {p:m(o.p),hours:m(o.hours),labour:s(o.labour),markup:s(o.markup),vat:s(o.vat),cur:s(o.cur,'Ft')};
+}
+let PRICES=norm(null), edited=false, ready=false, store=null, ref=null, dlCap=null;
+let lastSaved='', saveT=0, lastD=null, lastEl=null;
+function lsGet(){try{return JSON.parse(localStorage.getItem('bsp-prices')||'null');}catch(e){return null;}}
+function lsSet(s){try{localStorage.setItem('bsp-prices',s);}catch(e){}}
+function adopt(o){
+  const n=norm(o);
+  if(!edited){PRICES=n;return;}
+  const c=PRICES;   /* typed before the load finished: keep what was typed */
+  PRICES={p:{...n.p,...c.p},hours:{...n.hours,...c.hours},labour:c.labour,markup:c.markup,vat:c.vat,cur:c.cur};
+}
+function flush(){
+  saveT&&clearTimeout(saveT); saveT=0;
+  if(!ready) return;
+  const s=JSON.stringify(PRICES); if(s===lastSaved) return;
+  if(store==='db'&&ref){lastSaved=s;ref.set(JSON.parse(s)).catch(()=>{lastSaved='';});}
+  else{lsSet(s);lastSaved=s;}
+}
+function queueSave(){edited=true;clearTimeout(saveT);saveT=setTimeout(flush,600);}
+async function load(){
+  let db=null,user=null;
+  try{db=await window.bspUse('db');}catch(e){}
+  try{user=await window.bspUse('user');}catch(e){}
+  try{dlCap=await window.bspUse('downloads');}catch(e){dlCap=null;}
+  try{
+    if(db&&user){
+      const id=await user.id();
+      if(id){const r=db.collection('data/users/'+id).doc('prices'); const snap=await r.get(); ref=r; store='db'; adopt(snap&&snap.exists?snap.data():null);}
+    }
+  }catch(e){ref=null;store=null;}
+  if(store!=='db'){store='local';adopt(lsGet());}
+  lastSaved=JSON.stringify(PRICES); ready=true;
+  if(edited) flush();
+  if(lastD&&lastEl&&lastEl.isConnected) mount(lastD,lastEl);
+}
+
+/* ---- the design's lines: what must be bought, and what comes from stock ---- */
+function model(d){
+  const lines=[], stock=[];
+  const add=(key,label,qty,unit)=>{const x=lines.find(l=>l.key===key); if(x) x.qty+=qty; else lines.push({key,label,qty,unit});};
+  if(d.mode==='buy'&&d.shop){
+    (d.shop.rects||[]).forEach(r=>{
+      const buy=r.bins.filter(b=>b.from==='buy');
+      if(buy.length) add(`sheet|${r.m}|${r.t}`,`${smName(r.m)}, ${r.t} mm, sheet ${buy[0].L} × ${buy[0].W} mm`,buy.length,'sheet');
+      r.bins.filter(b=>b.from==='yours').forEach(b=>stock.push(`Your board: ${b.name} ${b.L} × ${b.W} × ${r.t} mm`));
+    });
+    (d.shop.lins||[]).forEach(l=>add(`len|${l.p}`,`${prName(l.p)}, ${prLen(l.p)} mm length`,l.bins.length,'length'));
+    (d.shop.units||[]).forEach(u=>add(`unit|${u.name}`,u.name,Number(u.q)||1,u.per||'pc'));
+  } else {
+    (d.hw||[]).forEach(h=>add(`hw|${h}`,h,1,'pc'));
+    ((A.PLAN&&A.PLAN.use)||[]).filter(b=>Object.values(d.groups||{}).some(g=>g.bi===b.bi))
+      .forEach(b=>stock.push(`Your board #${b.bi+1}${b.name?': '+b.name:''}`));
+  }
+  let steps=0;
+  try{steps=(d.steps&&d.steps.length)?d.steps.length:((A.manualParts(d).find(p=>p.h==='Assembly')||{items:[]}).items.length);}catch(e){}
+  return {lines,stock,hoursDef:steps*0.5};
+}
+function calc(d,m){
+  let sub=0, missing=0; const rows=[];
+  m.lines.forEach(l=>{const p=numOf(PRICES.p[l.key]); const cost=p==null?null:p*l.qty; if(cost==null) missing++; else sub+=cost; rows.push({label:l.label,qty:l.qty,unit:l.unit,p,cost});});
+  m.stock.forEach(s=>rows.push({label:s,stock:true,cost:0}));
+  const hrs=PRICES.hours[d.id]!==undefined?(numOf(PRICES.hours[d.id])||0):m.hoursDef;
+  const rate=numOf(PRICES.labour), lcost=rate==null?null:rate*hrs;
+  if(lcost==null) missing++; else sub+=lcost;
+  const mk=numOf(PRICES.markup)||0, vt=numOf(PRICES.vat)||0;
+  const markup=sub*mk/100, vat=(sub+markup)*vt/100;
+  return {rows,lab:{hrs,p:rate,cost:lcost},sub,mk,vt,markup,vat,total:sub+markup+vat,missing};
+}
+function view(d,m){
+  const c=calc(d,m);
+  const rows=c.rows.map(r=>r.stock
+    ?{label:r.label,qty:'',unitText:'from stock',costText:'0'}
+    :{label:r.label,qty:`${r.qty} ${r.unit}`,unitText:r.p==null?'—':money(r.p),costText:r.cost==null?'—':money(r.cost)});
+  const lab={hrs:c.lab.hrs,unitText:c.lab.p==null?'—':money(c.lab.p),costText:c.lab.cost==null?'—':money(c.lab.cost)};
+  const sums=[['Subtotal',c.sub],['Markup '+c.mk+' %',c.markup],['VAT '+c.vt+' %',c.vat],['Total',c.total]];
+  return {rows,lab,sums,cur:PRICES.cur||'',missing:c.missing,hasStock:c.rows.some(r=>r.stock)};
+}
+
+/* ---- text and file outputs ---- */
+function quoteText(d,v,client){
+  const cur=v.cur?' '+v.cur:'';
+  const L=[`${d.name} — quote`,`Date: ${today()}`];
+  if(client) L.push(`Client: ${client}`);
+  const sz=sizeText(d); if(sz) L.push(`Size: ${sz}`);
+  L.push('');
+  v.rows.forEach(r=>L.push(r.stock?`${r.label} · from stock`:`${r.label} · ${r.qty} · ${r.costText==='—'?'no price yet':r.costText+cur}`));
+  L.push(`Labour · ${v.lab.hrs} h · ${v.lab.costText==='—'?'no price yet':v.lab.costText+cur}`);
+  L.push('');
+  v.sums.forEach(([k,val])=>L.push(`${k}: ${val==null?'—':money(val)+cur}`));
+  if(v.missing) L.push(`${v.missing} ${v.missing===1?'item has':'items have'} no price yet.`);
+  return L.join('\n');
+}
+function quoteHtml(d,v,client){
+  const e=esc, cur=v.cur?' ('+v.cur+')':'';
+  const tr=(a,b,c,x)=>`<tr><td>${e(a)}</td><td class="n">${e(b)}</td><td class="n">${e(c)}</td><td class="n">${e(x)}</td></tr>`;
+  const items=v.rows.map(r=>tr(r.label,r.qty,r.unitText,r.costText)).join('');
+  const lab=tr('Labour',`${v.lab.hrs} h`,v.lab.unitText,v.lab.costText);
+  const sums=v.sums.map(([k,val],i)=>`<tr class="${i===3?'grand':''}"><th colspan="3">${e(k)}</th><td class="n">${val==null?'—':money(val)}</td></tr>`).join('');
+  const sz=sizeText(d);
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Quote: ${e(d.name)}</title>
+<style>
+@page{size:A4;margin:14mm}
+body{font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;color:#111;background:#fff;margin:24px auto;max-width:720px;padding:0 16px}
+h1{font-size:22px;margin:0 0 6px}
+.meta{color:#444;margin:2px 0}
+table{width:100%;border-collapse:collapse;margin-top:16px}
+th,td{padding:7px 8px;border-bottom:1px solid #ddd;text-align:left;vertical-align:top}
+thead th{font-size:12px;color:#555;font-weight:600}
+.n{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+tr.grand th,tr.grand td{font-weight:700;border-top:2px solid #111;font-size:16px;border-bottom:0}
+.note{color:#555;font-size:12px;margin-top:14px}
+@media print{body{margin:0;padding:0;max-width:none}}
+</style></head><body>
+<h1>Quote: ${e(d.name)}</h1>
+<p class="meta">Date: ${e(today())}</p>
+<p class="meta">Client: ${client?e(client):'______________________________'}</p>
+${sz?`<p class="meta">Size: ${e(sz)}</p>`:''}
+<table><thead><tr><th>Item</th><th class="n">Qty</th><th class="n">Unit price${e(cur)}</th><th class="n">Cost${e(cur)}</th></tr></thead>
+<tbody>${items}${lab}</tbody>
+<tbody>${sums}</tbody></table>
+${v.missing?`<p class="note">${v.missing} ${v.missing===1?'item has':'items have'} no price yet; totals cover the priced items only.</p>`:''}
+${v.hasStock?`<p class="note">Items from your own boards are listed as from stock.</p>`:''}
+</body></html>`;
+}
+function fileName(d){const slug=String(d.name).toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')||'design';return `quote-${slug}-${isoDay()}.html`;}
+function copyText(t){
+  try{if(navigator.clipboard&&navigator.clipboard.writeText) return navigator.clipboard.writeText(t);}catch(e){}
+  return new Promise((res,rej)=>{try{const ta=document.createElement('textarea');ta.value=t;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();const ok=document.execCommand('copy');ta.remove();ok?res():rej(new Error('copy'));}catch(e){rej(e);}});
+}
+
+/* ---- rendering: the editor is built once per mount; only the table repaints ---- */
+function paint(d,m,sec){
+  const v=view(d,m);
+  sec.querySelectorAll('[data-cur]').forEach(s=>{s.textContent=v.cur?'('+v.cur+')':'';});
+  sec.querySelector('.qitems').innerHTML=v.rows.map(r=>`<tr class="${r.stock?'stock':''}"><td>${esc(r.label)}</td><td class="n">${esc(r.qty)}</td><td class="n">${esc(r.unitText)}</td><td class="n">${esc(r.costText)}</td></tr>`).join('');
+  sec.querySelector('[data-lab-p]').textContent=v.lab.unitText;
+  sec.querySelector('[data-lab-c]').textContent=v.lab.costText;
+  sec.querySelector('.qsum').innerHTML=v.sums.map(([k,val],i)=>`<tr class="${i===3?'grand':''}"><th scope="row" colspan="3">${esc(k)}</th><td class="n">${val==null?'—':money(val)}</td></tr>`).join('');
+  const note=sec.querySelector('.qnote'); note.hidden=!v.missing;
+  note.textContent=v.missing?`${v.missing} ${v.missing===1?'item has':'items have'} no price yet. Totals cover the priced items only.`:'';
+}
+function mount(d,el){
+  const old=el.querySelector(':scope > details.quote-sec'); const wasOpen=old?old.open:false; if(old) old.remove();
+  const m=model(d), dl=!!dlCap, cur=PRICES.cur;
+  const ed=[];
+  m.lines.forEach(l=>ed.push(row(`<span>${esc(l.label)}<small>per ${esc(l.unit)}</small></span>`,
+    `<input inputmode="decimal" autocomplete="off" placeholder="—" data-p="${esc(l.key)}" value="${esc(PRICES.p[l.key]||'')}">`)));
+  ed.push(row('<span>Labour rate<small>per hour</small></span>',`<input inputmode="decimal" autocomplete="off" placeholder="—" data-k="labour" value="${esc(PRICES.labour)}">`));
+  ed.push(row('<span>Markup<small>percent of subtotal</small></span>',`<input inputmode="decimal" autocomplete="off" placeholder="0" data-k="markup" value="${esc(PRICES.markup)}">`));
+  ed.push(row('<span>VAT<small>percent, on subtotal plus markup</small></span>',`<input inputmode="decimal" autocomplete="off" placeholder="0" data-k="vat" value="${esc(PRICES.vat)}">`));
+  ed.push(row('<span>Currency</span>',`<input type="text" autocomplete="off" data-k="cur" value="${esc(cur)}">`));
+  const hoursVal=PRICES.hours[d.id]!==undefined?PRICES.hours[d.id]:String(m.hoursDef);
+  const sec=document.createElement('details');
+  sec.className='dsec quote-sec'; sec.open=wasOpen;
+  sec.innerHTML=`<summary><h3>Quote</h3></summary>
+  <div class="qwrap">
+    <div class="qeditor">
+      <h4>Your prices</h4>
+      <p class="hint">Yours alone, and kept for every design. Nothing is filled in for you: leave a price blank until you know it.</p>
+      <div class="qrows">${ed.join('')}</div>
+    </div>
+    <div class="qtable"><table class="parts">
+      <thead><tr><th>Item</th><th class="n">Qty</th><th class="n">Unit price <span data-cur></span></th><th class="n">Cost <span data-cur></span></th></tr></thead>
+      <tbody class="qitems"></tbody>
+      <tbody class="qlab"><tr><td>Labour</td><td class="n"><input class="qh" inputmode="decimal" autocomplete="off" data-h value="${esc(hoursVal)}" aria-label="Labour hours"> h</td><td class="n" data-lab-p></td><td class="n" data-lab-c></td></tr></tbody>
+      <tbody class="qsum"></tbody>
+    </table></div>
+    <p class="qnote" hidden></p>
+    ${dl?`<label class="qrow qclientrow"><span>Client</span><input type="text" class="qclient" autocomplete="off" placeholder="Client name"></label>`:''}
+    <div class="qbtns"><button class="b" type="button" data-act="copy">Copy quote</button>${dl?'<button class="b p" type="button" data-act="dl">Download quote</button>':''}<span class="toast" aria-live="polite"></span></div>
+  </div>`;
+  el.appendChild(sec);
+  const wrap=sec.querySelector('.qwrap');
+  const say=t=>{const s=sec.querySelector('.toast'); if(s) s.textContent=t;};
+  wrap.addEventListener('input',e=>{
+    const t=e.target;
+    if(t.dataset.p!==undefined) PRICES.p[t.dataset.p]=t.value;
+    else if(t.dataset.k) PRICES[t.dataset.k]=t.value;
+    else if(t.hasAttribute('data-h')) PRICES.hours[d.id]=t.value;
+    else return;
+    queueSave(); paint(d,m,sec);
+  });
+  wrap.addEventListener('click',e=>{
+    const b=e.target.closest('button[data-act]'); if(!b) return;
+    const v=view(d,m), client=(sec.querySelector('.qclient')||{value:''}).value.trim();
+    if(b.dataset.act==='copy'){
+      copyText(quoteText(d,v,client)).then(()=>say('Copied'),()=>say('Could not copy'));
+    } else if(b.dataset.act==='dl'&&dlCap){
+      try{dlCap.save({filename:fileName(d),data:quoteHtml(d,v,client)})
+        .then(()=>say('Saved'),err=>say(err&&err.code==='declined'?'Not saved':'Could not save the file'));}
+      catch(err){say('Could not save the file');}
+    }
+  });
+  paint(d,m,sec);
+}
+
+window.bspDetailHooks.push((d,el)=>{lastD=d;lastEl=el;mount(d,el);});
+{const el=document.querySelector('#detail .detail'); const d=A.PLAN&&A.PLAN.results.find(r=>r.id===A.selected);
+ if(d&&el){lastD=d;lastEl=el;mount(d,el);}}
+window.addEventListener('pagehide',()=>{if(saveT) flush();});
+load().catch(()=>{});
+})();
+</script>
 <!-- ===== end of slot A ===== -->
 <!-- (spacer) -->
 <!-- (spacer) -->

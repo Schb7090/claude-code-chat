@@ -4300,8 +4300,175 @@ try{
 <!-- (spacer) -->
 <!-- (spacer) -->
 <!-- ===== feature slot C: client share view. Only edit between the two tags below. ===== -->
-<style id="feat-share-css"></style>
-<script id="feat-share"></script>
+<style id="feat-share-css">
+/* client share view */
+body.bsp-client .lede,body.bsp-client .mark,body.bsp-client .jump,body.bsp-client section.main,body.bsp-client aside,body.bsp-client .filters,body.bsp-client #srcChips,body.bsp-client #chips,body.bsp-client #cards,body.bsp-client #moreWrap,body.bsp-client #summary,body.bsp-client #warns,body.bsp-client #detail,body.bsp-client #guide,
+body.bsp-pending .lede,body.bsp-pending .mark,body.bsp-pending .jump,body.bsp-pending section.main,body.bsp-pending aside,body.bsp-pending .filters,body.bsp-pending #srcChips,body.bsp-pending #chips,body.bsp-pending #cards,body.bsp-pending #moreWrap,body.bsp-pending #summary,body.bsp-pending #warns,body.bsp-pending #detail,body.bsp-pending #guide{display:none!important}
+#bsp-gallery{display:none;flex-direction:column;gap:16px;width:100%;min-width:0}
+body.bsp-client #bsp-gallery,body.bsp-pending #bsp-gallery{display:flex}
+#bsp-gallery .bsp-head h2{margin:0 0 4px}
+#bsp-gallery .bsp-head .hint{font-size:15px}
+#bsp-gallery .bsp-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:16px}
+@media (min-width:680px){#bsp-gallery .bsp-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (min-width:1100px){#bsp-gallery .bsp-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+#bsp-gallery .bsp-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:14px;display:flex;flex-direction:column;gap:10px;min-width:0}
+#bsp-gallery .bsp-card h3{margin:0;font-size:22px}
+#bsp-gallery .bsp-card .scene{min-height:200px;padding:6px}
+#bsp-gallery .bsp-card .scene svg{width:100%;height:auto}
+#bsp-gallery .bsp-card p{margin:0}
+#bsp-gallery .bsp-note{font-size:16px;line-height:1.5;border-left:3px solid var(--accent);padding-left:10px}
+#bsp-gallery .bsp-size{font-size:14px;font-family:var(--f-mono)}
+#bsp-gallery [data-pick]{margin-top:auto;min-height:44px;width:100%}
+#bsp-gallery .bsp-wait{font-size:16px;color:var(--muted)}
+#bsp-gallery .bsp-wait,#bsp-gallery .bsp-head{padding:0 2px}
+.bsp-tap{min-height:44px}
+.bsp-chip.on{background:var(--ink);color:var(--bg)}
+.bsp-share-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;border-top:1px solid var(--line);padding-top:14px}
+.bsp-share-row .bsp-field{display:flex;flex-direction:column;gap:4px;flex:1 1 240px;font-size:13px;color:var(--muted);min-width:0}
+.bsp-share-row input{min-height:44px;font:inherit;font-size:16px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius-s);background:var(--bg);color:var(--ink);width:100%;box-sizing:border-box}
+.bsp-share-row .bsp-shared{margin:0;flex:1 1 200px;font-size:15px}
+.bsp-share-row .bsp-msg{font-size:13px;color:var(--muted);width:100%}
+.bsp-share-row .b{min-height:44px}
+</style>
+<script id="feat-share">
+/* Client share view: owner picks designs to share; a client sees a gallery instead of the planner. */
+(function(){
+'use strict';
+const KEYS=['stock','wallW','maxH','gap','minD','kerf','mat','load','ceil','person','sf','sfb'];
+const LS='bsp-shares', WAIT_MS=10000;
+const {esc,fmt,renderScene}=window.bspApi;
+const st={db:null,user:null,comments:null,owner:false,pending:true,preview:false,shares:{},cache:new Map(),drafts:{},cur:null,timer:null,gallery:null};
+
+const snapSettings=()=>{const S=window.bspApi.S,o={};KEYS.forEach(k=>{if(S[k]!==undefined)o[k]=S[k];});return JSON.parse(JSON.stringify(o));};
+const clean=(id,v)=>(v&&typeof v==='object'&&v.settings&&Array.isArray(v.settings.stock))
+  ?{designId:String(v.designId||id),name:String(v.name||id),note:String(v.note||''),settings:v.settings,sharedAt:String(v.sharedAt||'')}:null;
+const cleanAll=m=>{const o={};Object.keys(m||{}).forEach(k=>{const c=clean(k,m[k]);if(c)o[k]=c;});return o;};
+function localRead(){try{const v=JSON.parse(localStorage.getItem(LS)||'{}');return v&&typeof v==='object'?v:{};}catch(e){return {};}}
+function localWrite(m){try{localStorage.setItem(LS,JSON.stringify(m));return true;}catch(e){return false;}}
+
+/* one write per owner click; data null removes the share */
+async function store(id,data){
+  if(!st.db){
+    const m=localRead(); if(data) m[id]=data; else delete m[id];
+    if(!localWrite(m)) throw new Error('storage blocked');
+    st.shares=cleanAll(m); return;
+  }
+  const ref=st.db.collection('shares').doc(id);
+  if(data) await ref.set(data); else await ref.delete();
+  const next={...st.shares};
+  if(data) next[id]=clean(id,data); else delete next[id];
+  st.shares=next;
+}
+
+/* owner: share row under the design's header */
+function shareRow(d,el){
+  const old=el.querySelector(':scope > .bsp-share-row'); if(old) old.remove();
+  const sh=st.shares[d.id];
+  const row=document.createElement('div'); row.className='bsp-share-row';
+  if(sh){
+    row.innerHTML=`<p class="bsp-shared">Shown to the client${sh.note?': <i>'+esc(sh.note)+'</i>':''}</p><button type="button" class="b bsp-tap">Shared ✓ (remove)</button><span class="bsp-msg" role="status"></span>`;
+  }else{
+    row.innerHTML=`<label class="bsp-field"><span>Note for the client (optional)</span><input type="text" maxlength="300" placeholder="e.g. oak top, fits the hall" value="${esc(st.drafts[d.id]||'')}"></label><button type="button" class="b p bsp-tap">Share with client</button><span class="bsp-msg" role="status"></span>`;
+    row.querySelector('input').addEventListener('input',e=>{st.drafts[d.id]=e.target.value;});
+  }
+  const btn=row.querySelector('button'), msg=row.querySelector('.bsp-msg');
+  btn.addEventListener('click',async()=>{
+    btn.disabled=true; msg.textContent=sh?'Removing…':'Saving…';
+    try{
+      if(sh){ await store(d.id,null); }
+      else{
+        const inp=row.querySelector('input'), note=(inp?inp.value:'').trim().slice(0,300);
+        await store(d.id,{designId:d.id,name:String(d.name||d.id),note,settings:snapSettings(),sharedAt:new Date().toISOString()});
+        delete st.drafts[d.id];
+      }
+      refresh();
+    }catch(e){ btn.disabled=false; msg.textContent='Could not save. Try again.'; }
+  });
+  const head=el.querySelector('.dhead');
+  if(head) head.after(row); else el.prepend(row);
+}
+function renderCurRow(){ const c=st.cur; if(!c||!st.owner||!c.el.isConnected) return; shareRow(c.d,c.el); }
+
+/* client: gallery card; the drawing is rebuilt from the snapshot's own settings */
+function card(s,r){
+  const name=esc(s.name);
+  if(!r||r.none||!r.dims) return `<article class="bsp-card"><h3>${name}</h3><p class="hint">This design no longer fits the boards it was planned with.</p></article>`;
+  let scene=''; try{scene=renderScene(r,false);}catch(e){}
+  const area=r.area>=2000?`<p class="hint">${fmt(r.area/1e6,2)} m² usable surface</p>`:'';
+  const note=s.note?`<p class="bsp-note">${esc(s.note)}</p>`:'';
+  const pick=st.comments?'<button type="button" class="b p bsp-tap" data-pick>Comment / pick this one</button>':'';
+  return `<article class="bsp-card" data-design="${esc(s.designId)}"><div class="scene">${scene}</div><h3>${name}</h3><p class="bsp-size">${r.dims.w} × ${r.dims.h} × ${r.dims.d} mm overall</p>${area}${note}${pick}</article>`;
+}
+function renderGallery(){
+  const g=st.gallery; if(!g) return;
+  if(!st.owner&&st.pending){ g.innerHTML='<p class="bsp-wait">Loading the designs…</p>'; return; }
+  if(!document.body.classList.contains('bsp-client')){ g.innerHTML=''; return; }
+  const list=Object.values(st.shares).sort((a,b)=>a.sharedAt<b.sharedAt?-1:a.sharedAt>b.sharedAt?1:0);
+  const head=`<div class="bsp-head"><h2>${st.owner?'Client preview':'Designs for you'}</h2><p class="hint">${st.owner?'This is what your client sees. Use Client view in the header to go back.':'Pick the ones you like, and leave a comment on each.'}</p></div>`;
+  if(!list.length){ g.innerHTML=head+'<p class="bsp-wait">Nothing is shared yet. Open a design and choose Share with client.</p>'; return; }
+  const cards=list.map(s=>{
+    const key=JSON.stringify(s.settings); let R=st.cache.get(key);
+    if(!R){ R=new Map(); try{ window.planAll(s.settings).results.forEach(r=>R.set(r.id,r)); }catch(e){} st.cache.set(key,R); }
+    return card(s,R.get(s.designId));
+  }).join('');
+  g.innerHTML=head+`<div class="bsp-grid">${cards}</div>`;
+}
+async function pick(e){
+  const b=e.target.closest('[data-pick]'); if(!b) return;
+  const el=b.closest('.bsp-card'); if(!el) return;
+  try{ const c=await window.bspUse('comments'); if(c) await c.openComposer({element:el}); }catch(err){}
+}
+
+function bodyState(){
+  const has=Object.keys(st.shares).length>0, cl=document.body.classList;
+  cl.toggle('bsp-client',(!st.owner&&!st.pending&&has)||(st.owner&&st.preview));
+  cl.toggle('bsp-pending',!st.owner&&st.pending);
+}
+function syncChip(){ const c=document.getElementById('bsp-chip'); if(c){c.setAttribute('aria-pressed',String(st.preview));c.classList.toggle('on',st.preview);} }
+function refresh(){ bodyState(); renderGallery(); renderCurRow(); syncChip(); }
+
+function addChip(){
+  const box=document.querySelector('header .themeBox'); if(!box||document.getElementById('bsp-chip')) return;
+  const b=document.createElement('button'); b.type='button'; b.id='bsp-chip'; b.className='b bsp-tap bsp-chip';
+  b.textContent='Client view'; b.setAttribute('aria-pressed','false');
+  b.addEventListener('click',()=>{st.preview=!st.preview; refresh();});
+  box.appendChild(b);
+}
+
+/* client: 10 s without a server answer falls back to the normal planner */
+function settle(){ if(st.timer){clearTimeout(st.timer);st.timer=null;} st.pending=false; refresh(); }
+function listen(){
+  try{
+    st.db.collection('shares').onSnapshot(snap=>{
+      const m={}; (snap.docs||[]).forEach(d=>{const c=clean(d.id,d.data()); if(c) m[d.id]=c;});
+      st.shares=m;
+      if(!snap.metadata||!snap.metadata.fromCache) settle(); else refresh();
+    },()=>settle());
+  }catch(e){ settle(); }
+}
+
+async function boot(){
+  const main=document.querySelector('main.layout');
+  if(main){ const g=document.createElement('section'); g.id='bsp-gallery'; g.setAttribute('aria-live','polite'); main.appendChild(g); st.gallery=g; g.addEventListener('click',pick); }
+  const [db,user,comments]=await Promise.all([window.bspUse('db'),window.bspUse('user'),window.bspUse('comments')]);
+  st.db=db; st.user=user; st.comments=comments;
+  let canEdit=false; if(user){ try{canEdit=!!(await user.canEdit());}catch(e){} }
+  st.owner=!db||!user||canEdit;   /* no capabilities = local testing, treated as owner */
+  if(st.owner) addChip();
+  if(db){
+    st.pending=!st.owner;
+    if(st.pending) st.timer=setTimeout(()=>{st.timer=null;settle();},WAIT_MS);
+    listen();
+  }else{
+    st.shares=cleanAll(localRead()); st.pending=false;
+  }
+  refresh();
+}
+
+window.bspDetailHooks.push((d,el)=>{ try{ st.cur={d,el}; if(st.owner) shareRow(d,el); }catch(e){console.error(e);} });
+boot().catch(e=>console.error(e));
+})();
+</script>
 <!-- ===== end of slot C ===== -->
 
 </body></html>

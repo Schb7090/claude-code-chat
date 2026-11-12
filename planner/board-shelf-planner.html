@@ -3446,7 +3446,7 @@ let S=null;
 try{S=JSON.parse(localStorage.getItem(LSKEY));}catch(e){S=null;}
 if(!S||!Array.isArray(S.stock)) S=PRESET?Object.assign(JSON.parse(JSON.stringify(DEF)),PRESET.settings||{},{stock:PRESET.stock,example:false}):JSON.parse(JSON.stringify(DEF));
 let selected=null, PLAN=null, timer=null;
-const save=()=>{try{localStorage.setItem(LSKEY,JSON.stringify(S));}catch(e){}};
+const save=()=>{try{localStorage.setItem(LSKEY,JSON.stringify(S));}catch(e){} window.dispatchEvent(new CustomEvent('bsp:save'));};
 const $=s=>document.querySelector(s);
 const esc=s=>String(s).replace(/[&<>"]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
 const fmt=(v,d=0)=>Number(v).toLocaleString('en-GB',{minimumFractionDigits:d,maximumFractionDigits:d});
@@ -3802,6 +3802,456 @@ renderDetail=function(){_bspRenderDetail();const d=PLAN&&PLAN.results.find(r=>r.
 run();
 </script>
 
+<!-- ===== feature slot E: shared store (offline cache + outbox), status pill and file sync. ===== -->
+<style id="feat-sync-css">
+.sync-pill{font:500 12px var(--f-mono);min-height:44px;padding:6px 12px;border-radius:999px;white-space:nowrap}
+.sync-pill[data-state=wait]{color:var(--warn)}
+.sync-panel{display:grid;gap:10px;padding:12px;margin:8px 0;border:1px solid var(--line);border-radius:var(--radius-s);background:var(--panel);color:var(--ink);min-width:0}
+.sync-panel[hidden]{display:none}
+.sync-panel p{margin:0;font-size:13px}
+.sync-panel .hint{color:var(--muted)}
+.sync-panel label{display:grid;gap:6px;font-size:13px}
+.sync-panel input[type=file]{font:inherit;font-size:14px;max-width:100%}
+.sync-panel .sync-msg{min-height:1em;overflow-wrap:anywhere}
+</style>
+<script id="feat-sync">
+/* Shared store. Every write lands in the local cache and the outbox first, then goes to the
+   data store when one is there. Remote data is merged in, never overwriting a newer local value. */
+(function(){
+'use strict';
+const KEYS=['stock','kerf','wallW','maxH','gap','minD','mat','load','ceil','person','sf','sfb','fit','cat','sort','src'];
+const NUM=['kerf','wallW','maxH','gap','minD','ceil','person','sf','sfb'], STR=['mat','load','cat','sort','src'];
+const SORTS=['area','wow','yield'], SRCS=['all','own','buy','pro'];
+const CACHE_KEY='bsp-cache', OUT_KEY='bsp-outbox';
+const READY_MS=10000, RETRY_MS=30000, SETTINGS_MS=800, MAX_FILE=5*1024*1024;
+const SINGLE={prices:1,settings:1}, COLL={signoffs:1,shares:1};
+const KINDS=['prices','settings','signoffs','shares'];
+const isObj=v=>!!v&&typeof v==='object'&&!Array.isArray(v);
+const clone=v=>v===undefined?undefined:JSON.parse(JSON.stringify(v));
+const now=()=>Date.now();
+const num=v=>typeof v==='number'&&isFinite(v)?v:null;
+const nz=v=>{const n=num(v);return n===null?0:n;};
+const str=(v,max)=>typeof v==='string'?v.slice(0,max):'';
+const ms=v=>num(v)!==null?v:(typeof v==='string'?(Date.parse(v)||0):0);
+const readJ=(k,d)=>{try{const v=JSON.parse(localStorage.getItem(k));return v==null?d:v;}catch(e){return d;}};
+const writeJ=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));return true;}catch(e){return false;}};
+const dropKey=k=>{try{localStorage.removeItem(k);}catch(e){}};
+const B=()=>window.bspApi;
+
+/* ---- validation: everything that comes from storage, the data store or a file passes through here ---- */
+function cleanDims(v){
+  if(!isObj(v)||num(v.w)===null||num(v.h)===null||num(v.d)===null) return null;
+  return {w:v.w,h:v.h,d:v.d};
+}
+function cleanSettings(raw){
+  const o={}; if(!isObj(raw)) return o;
+  KEYS.forEach(k=>{
+    const v=raw[k]; if(v===undefined) return;
+    if(k==='stock'){
+      if(Array.isArray(v)) o.stock=v.slice(0,500).filter(isObj).map(r=>({name:str(r.name,200),x:nz(r.x),y:nz(r.y),z:nz(r.z),q:nz(r.q)}));
+    } else if(k==='fit'){
+      if(isObj(v)){ const f={}; Object.keys(v).slice(0,500).forEach(id=>{const c=cleanDims(v[id]); if(c&&id.length<=200) f[id]=c;}); o.fit=f; }
+    } else if(NUM.indexOf(k)>=0){ if(num(v)!==null) o[k]=v; }
+    else if(typeof v==='string'){ o[k]=v.slice(0,100); }
+  });
+  return o;
+}
+/* a settings object is usable only with a stock list and known values for the fields the planner reads directly */
+function cleanRemoteSettings(raw){
+  if(!isObj(raw)) return null;
+  const s=cleanSettings(raw); if(!Array.isArray(s.stock)) return null;
+  const has=(obj,k)=>typeof obj!=='undefined'&&obj!==null&&Object.prototype.hasOwnProperty.call(obj,k);
+  if(s.mat!==undefined&&!has(typeof MATS==='undefined'?null:MATS,s.mat)) delete s.mat;
+  if(s.load!==undefined&&!has(typeof LOADS==='undefined'?null:LOADS,s.load)) delete s.load;
+  if(s.sort!==undefined&&SORTS.indexOf(s.sort)<0) delete s.sort;
+  if(s.src!==undefined&&SRCS.indexOf(s.src)<0) delete s.src;
+  if(s.mat===undefined||s.load===undefined) return null;
+  s.updatedAt=nz(raw.updatedAt);
+  return s;
+}
+function cleanPriceDoc(raw){
+  if(!isObj(raw)||!isObj(raw.items)) return null;
+  const items={}; let n=0;
+  Object.keys(raw.items).forEach(k=>{
+    if(n>=20000||!/^[ph]:/.test(k)||k.length>300) return;
+    const it=raw.items[k]; if(!isObj(it)||typeof it.v!=='string'||num(it.ts)===null) return;
+    items[k]={v:it.v.slice(0,100),ts:it.ts}; n++;
+  });
+  const m=isObj(raw.meta)?raw.meta:{}, meta={ts:nz(m.ts)};
+  ['labour','markup','vat','cur'].forEach(k=>{ if(typeof m[k]==='string') meta[k]=m[k].slice(0,100); });
+  return {items,meta};
+}
+/* the first version kept one flat object: {p, hours, labour, markup, vat, cur} */
+function flatToDoc(f,ts){
+  const items={}, add=(prefix,obj)=>{ if(isObj(obj)) Object.keys(obj).forEach(k=>{ if(typeof obj[k]==='string'&&k.length<=280) items[prefix+k]={v:obj[k].slice(0,100),ts}; }); };
+  add('p:',f.p); add('h:',f.hours);
+  const meta={ts};
+  ['labour','markup','vat','cur'].forEach(k=>{ if(typeof f[k]==='string') meta[k]=f[k].slice(0,100); });
+  return {items,meta};
+}
+function normPrices(raw){
+  if(!isObj(raw)) return null;
+  const d=cleanPriceDoc(raw); if(d) return {doc:d,migrated:false};
+  if(isObj(raw.p)||isObj(raw.hours)) return {doc:flatToDoc(raw,now()),migrated:true};
+  return null;
+}
+function cleanSignoff(id,r){
+  if(!isObj(r)||!id||id.length>200) return null;
+  const anchors=Array.isArray(r.anchors)?r.anchors.slice(0,200).filter(isObj).map((a,i)=>{
+    const req=nz(a.requiredKN), got=nz(a.reachedKN);
+    return {n:nz(a.n)||i+1,type:str(a.type,200),substrate:str(a.substrate,100),requiredKN:req,reachedKN:got,pass:got>=req,photoId:typeof a.photoId==='string'?str(a.photoId,200):null};
+  }):[];
+  return {id,installerId:typeof r.installerId==='string'?str(r.installerId,200):null,designId:str(r.designId,200),designName:str(r.designName,200),job:str(r.job,200),location:str(r.location,200),
+    date:str(r.date,40),installerName:str(r.installerName,200),notes:str(r.notes,2000),createdAt:str(r.createdAt,40),
+    checks:Array.isArray(r.checks)?r.checks.slice(0,100).map(c=>str(c,300)):[],anchors};
+}
+function cleanShare(id,r){
+  if(!isObj(r)) return null;
+  const did=str(r.designId||id,200); if(!did) return null;
+  if(r.removed===true) return {designId:did,removed:true,removedAt:str(r.removedAt,40),ts:nz(r.ts)};
+  const settings=cleanSettings(r.settings); if(!Array.isArray(settings.stock)) return null;
+  return {designId:did,name:str(r.name||did,200),note:str(r.note,300),settings,fit:cleanDims(r.fit),sharedAt:str(r.sharedAt,40)};
+}
+const shareStamp=r=>!r?0:(r.removed?Math.max(ms(r.removedAt),nz(r.ts)):ms(r.sharedAt));
+const emptyPrices=()=>({items:{},meta:{ts:0}});
+
+/* ---- state ---- */
+const cache={prices:null,settings:null,signoffs:{},shares:{}};
+let outbox=[], mode='starting', db=null, base='', flushing=false, readyDone=false, readyTimer=0, stTimer=0;
+const listeners={}, firstAnswer={};
+let readyResolve, openResolve;
+const readyP=new Promise(r=>{readyResolve=r;}), openedP=new Promise(r=>{openResolve=r;});
+
+function persist(){ writeJ(CACHE_KEY,cache); writeJ(OUT_KEY,outbox); }
+function statusChanged(){ try{window.dispatchEvent(new CustomEvent('bsp:status'));}catch(e){} }
+function emit(kind,origin,id){
+  const set=listeners[kind]; if(!set) return;
+  Array.from(set).forEach(fn=>{try{fn({kind,id:id||null,origin});}catch(e){console.error(e);}});
+}
+function loadState(){
+  const c=readJ(CACHE_KEY,{});
+  if(isObj(c)){
+    cache.prices=cleanPriceDoc(c.prices);
+    cache.settings=cleanRemoteSettings(c.settings)||null;
+    if(isObj(c.signoffs)) Object.keys(c.signoffs).forEach(id=>{const r=cleanSignoff(id,c.signoffs[id]); if(r) cache.signoffs[id]=r;});
+    if(isObj(c.shares)) Object.keys(c.shares).forEach(id=>{const r=cleanShare(id,c.shares[id]); if(r) cache.shares[id]=r;});
+  }
+  const ob=readJ(OUT_KEY,[]);
+  outbox=Array.isArray(ob)?ob.filter(e=>isObj(e)&&KINDS.indexOf(e.kind)>=0&&typeof e.id==='string'&&(e.op==='put'||e.op==='remove')):[];
+}
+/* outbox: one entry per document; the newest write wins. The data written is read from the cache at flush time. */
+function enqueue(kind,id,op){
+  const data=op==='remove'?null:(SINGLE[kind]?cache[kind]:cache[kind][id])||null;
+  outbox=outbox.filter(e=>!(e.kind===kind&&e.id===id));
+  outbox.push({kind,id,op,data:clone(data),ts:now()});
+}
+
+/* ---- merge rules ---- */
+function mergePrices(inc){
+  const cur=cache.prices||emptyPrices(), items=Object.assign({},cur.items); let n=0;
+  Object.keys(inc.items).forEach(k=>{
+    const a=inc.items[k], b=items[k];
+    if(!b||a.ts>b.ts){ if(!b||b.v!==a.v) n++; items[k]=a; }
+  });
+  let meta=cur.meta;
+  if(inc.meta.ts>(cur.meta.ts||0)){
+    const keys=['labour','markup','vat','cur'];
+    if(keys.some(k=>inc.meta[k]!==undefined&&inc.meta[k]!==cur.meta[k])) n++;
+    meta=inc.meta;
+  }
+  cache.prices={items,meta};
+  return n;
+}
+function mergeSignoffs(map){
+  let n=0; Object.keys(map||{}).forEach(id=>{
+    if(cache.signoffs[id]) return;   /* an existing sign-off is never overwritten */
+    const r=cleanSignoff(id,map[id]); if(r){cache.signoffs[id]=r; n++;}
+  });
+  return n;
+}
+function mergeShares(map){
+  let n=0; Object.keys(map||{}).forEach(id=>{
+    const r=cleanShare(id,map[id]); if(!r) return;
+    const cur=cache.shares[id];
+    if(!cur||shareStamp(r)>shareStamp(cur)){cache.shares[id]=r; n++;}
+  });
+  return n;
+}
+/* settings: the whole object, newest updatedAt wins */
+function settingsOf(raw){ const s=cleanSettings(raw); return s; }
+function sameSettings(a,b){ return JSON.stringify(settingsOf(a))===JSON.stringify(settingsOf(b)); }
+function snapS(){ const S=B().S, raw={}; KEYS.forEach(k=>{ if(S[k]!==undefined) raw[k]=S[k]; }); return raw; }
+function applySettings(doc){
+  const S=B().S;
+  KEYS.forEach(k=>{ if(doc[k]!==undefined) S[k]=clone(doc[k]); else delete S[k]; });
+  cache.settings=clone(doc);
+  persist();
+  try{
+    B().save(); B().run();
+    if(typeof renderStock==='function') renderStock();
+    ['mat','load','wallW','maxH','gap','minD','kerf','ceil','person','sf','sfb'].forEach(f=>{ const el=document.getElementById('f-'+f); if(el&&S[f]!==undefined) el.value=S[f]; });
+  }catch(e){ console.error(e); }
+}
+function checkSettings(){
+  stTimer=0;
+  const snap=snapS(), cur=cache.settings;
+  if(cur&&sameSettings(cur,snap)) return;
+  const updatedAt=Math.max(now(),(cur?cur.updatedAt:0)+1);
+  put('settings','doc',Object.assign(settingsOf(snap),{updatedAt}));
+}
+
+/* ---- writes ---- */
+async function put(kind,id,data){
+  try{
+    if(!isObj(data)&&kind!=='prices') return false;
+    if(kind==='prices'){ const d=cleanPriceDoc(data); if(!d) return false; cache.prices=d; enqueue(kind,'doc','put'); }
+    else if(kind==='settings'){ const s=cleanRemoteSettings(data); if(!s) return false; cache.settings=s; enqueue(kind,'doc','put'); }
+    else if(kind==='signoffs'){ const key=String(id||''); const r=cleanSignoff(key,data); if(!r) return false; cache.signoffs[key]=r; enqueue(kind,key,'put'); }
+    else if(kind==='shares'){ const key=String(id||''); const r=cleanShare(key,data); if(!r) return false; cache.shares[key]=r; enqueue(kind,key,'put'); }
+    else return false;
+    persist(); statusChanged(); emit(kind,'local',SINGLE[kind]?'doc':String(id)); flush();
+    return true;
+  }catch(e){ return false; }
+}
+async function remove(kind,id){
+  try{
+    if(kind==='shares') return await put('shares',id,{designId:String(id),removed:true,removedAt:new Date().toISOString(),ts:now()});
+    if(!COLL[kind]) return false;
+    const key=String(id||''); if(!key) return false;
+    delete cache[kind][key]; enqueue(kind,key,'remove');
+    persist(); statusChanged(); emit(kind,'local',key); flush();
+    return true;
+  }catch(e){ return false; }
+}
+
+/* one write at a time; each write reads the remote copy first so a newer remote value is never overwritten */
+async function writeRemote(e){
+  const kind=e.kind;
+  if(kind==='prices'){
+    const ref=db.doc(base+'/prices'), snap=await ref.get(), raw=snap&&snap.exists?snap.data():null;
+    const n=raw?normPrices(raw):null;
+    if(n&&mergePrices(n.doc)>0){ persist(); emit('prices','remote',null); }
+    if(cache.prices) await ref.set(clone(cache.prices));
+  } else if(kind==='settings'){
+    const ref=db.doc(base+'/settings'), snap=await ref.get(), raw=snap&&snap.exists?snap.data():null;
+    const r=raw?cleanRemoteSettings(raw):null;
+    if(r&&r.updatedAt>(cache.settings?cache.settings.updatedAt:-1)){ applySettings(r); emit('settings','remote',null); return; }
+    if(cache.settings) await ref.set(clone(cache.settings));
+  } else if(kind==='signoffs'){
+    const ref=db.collection('signoffs').doc(e.id);
+    if(e.op==='remove'){ await ref.delete(); return; }
+    if(cache.signoffs[e.id]) await ref.set(clone(cache.signoffs[e.id]));
+  } else if(kind==='shares'){
+    const ref=db.collection('shares').doc(e.id), snap=await ref.get(), raw=snap&&snap.exists?snap.data():null;
+    const r=raw?cleanShare(e.id,raw):null;
+    if(r&&shareStamp(r)>shareStamp(cache.shares[e.id])){ cache.shares[e.id]=r; persist(); emit('shares','remote',e.id); return; }
+    if(cache.shares[e.id]) await ref.set(clone(cache.shares[e.id]));
+  }
+}
+async function flush(){
+  if(flushing||mode!=='remote'||!readyDone) return;
+  if(!outbox.length||navigator.onLine===false){ statusChanged(); return; }
+  flushing=true;
+  try{
+    while(outbox.length){
+      const e=outbox[0];
+      try{ await writeRemote(e); }catch(err){ break; }
+      const i=outbox.indexOf(e); if(i>=0){ outbox.splice(i,1); persist(); }
+      statusChanged();
+    }
+  }finally{ flushing=false; statusChanged(); }
+}
+
+/* ---- remote: open, subscribe, merge ---- */
+async function openRemote(){
+  let dbc=null, user=null;
+  try{dbc=await window.bspUse('db');}catch(e){}
+  try{user=await window.bspUse('user');}catch(e){}
+  if(!dbc||!user) return false;
+  let uid=null; try{uid=await user.id();}catch(e){}
+  if(!uid) return false;
+  db=dbc; base='data/users/'+String(uid);
+  return true;
+}
+function onRemote(kind,raw){
+  let changed=0;
+  try{
+    if(kind==='prices'){
+      if(raw==null){ if(cache.prices) enqueue('prices','doc','put'); }
+      else{ const n=normPrices(raw); if(n){ changed=mergePrices(n.doc); if(n.migrated) enqueue('prices','doc','put'); } }
+    } else if(kind==='settings'){
+      if(raw==null){ if(cache.settings) enqueue('settings','doc','put'); }   /* baseline keeps updatedAt 0, so any real edit elsewhere wins */
+      else{ const r=cleanRemoteSettings(raw); if(r&&r.updatedAt>(cache.settings?cache.settings.updatedAt:-1)){ applySettings(r); changed=1; } }
+    } else if(kind==='signoffs') changed=mergeSignoffs(raw);
+    else if(kind==='shares') changed=mergeShares(raw);
+  }catch(e){ console.error(e); }
+  persist();
+  if(changed) emit(kind,'remote',null);
+  statusChanged();
+}
+function answered(kind){
+  firstAnswer[kind]=true;
+  if(KINDS.every(k=>firstAnswer[k])) finishReady();
+}
+function finishReady(){
+  if(readyDone) return;
+  readyDone=true; clearTimeout(readyTimer);
+  readyResolve(); flush(); statusChanged();
+}
+function subscribeAll(){
+  const onErr=(kind)=>()=>{ answered(kind); };
+  try{
+    db.doc(base+'/prices').onSnapshot(s=>{ onRemote('prices',s&&s.exists?s.data():null); answered('prices'); },onErr('prices'));
+    db.doc(base+'/settings').onSnapshot(s=>{ onRemote('settings',s&&s.exists?s.data():null); answered('settings'); },onErr('settings'));
+    db.collection('signoffs').onSnapshot(snap=>{ const m={}; (snap&&snap.docs||[]).forEach(d=>{m[d.id]=d.data()||{};}); onRemote('signoffs',m); answered('signoffs'); },onErr('signoffs'));
+    db.collection('shares').onSnapshot(snap=>{ const m={}; (snap&&snap.docs||[]).forEach(d=>{m[d.id]=d.data()||{};}); onRemote('shares',m); answered('shares'); },onErr('shares'));
+  }catch(e){ console.error(e); finishReady(); }
+}
+
+/* ---- one-time migration of the keys the features used to keep ---- */
+function migrateLegacy(){
+  const lp=readJ('bsp-prices',null);
+  if(lp!==null){
+    const n=normPrices(lp);
+    /* a legacy copy only fills gaps when the store already has prices (ts 0 loses to any stored key) */
+    if(n){ mergePrices(n.migrated?flatToDoc(lp,cache.prices?0:now()):n.doc); enqueue('prices','doc','put'); }
+    dropKey('bsp-prices');
+  }
+  const ls=readJ('bsp-signoffs',null);
+  if(Array.isArray(ls)){ ls.slice(0,5000).forEach(r=>{ const id=isObj(r)&&typeof r.id==='string'?r.id:''; const c=cleanSignoff(id,r); if(c&&!cache.signoffs[id]){cache.signoffs[id]=c; enqueue('signoffs',id,'put');} }); dropKey('bsp-signoffs'); }
+  const sh=readJ('bsp-shares',null);
+  if(isObj(sh)){ Object.keys(sh).slice(0,5000).forEach(id=>{ const c=cleanShare(id,sh[id]); if(c&&(!cache.shares[id]||shareStamp(c)>shareStamp(cache.shares[id]))){cache.shares[id]=c; enqueue('shares',id,'put');} }); dropKey('bsp-shares'); }
+}
+
+/* ---- status pill, export and import ---- */
+let pill=null, panel=null, msgEl=null;
+function statusText(){
+  if(mode==='local') return 'This device only';
+  if(!readyDone) return 'Connecting…';
+  return outbox.length?`Offline: ${outbox.length} change${outbox.length===1?'':'s'} waiting`:'Saved online';
+}
+function paint(){
+  if(!pill) return;
+  const t=statusText(); pill.textContent=t; pill.setAttribute('aria-label','Sync status: '+t);
+  pill.dataset.state=(mode==='remote'&&readyDone&&outbox.length)?'wait':'';
+}
+function say(t){ if(msgEl) msgEl.textContent=t; }
+function dayStamp(){const t=new Date(),p=n=>String(n).padStart(2,'0');return `${t.getFullYear()}-${p(t.getMonth()+1)}-${p(t.getDate())}`;}
+function settingsDoc(){
+  clearTimeout(stTimer); checkSettings();
+  return cache.settings?clone(cache.settings):null;
+}
+async function exportChanges(){
+  const payload={format:'bsp-sync',version:1,exportedAt:new Date().toISOString(),data:{
+    prices:cache.prices?clone(cache.prices):null,
+    settings:settingsDoc(),
+    signoffs:Object.keys(cache.signoffs).map(id=>clone(cache.signoffs[id])),
+    shares:Object.keys(cache.shares).map(id=>clone(cache.shares[id]))}};
+  const json=JSON.stringify(payload,null,2), name=`board-planner-sync-${dayStamp()}.json`;
+  let dl=null; try{ dl=await window.bspUse('downloads'); }catch(e){}
+  if(dl){
+    try{ const r=await dl.save({filename:name,data:json}); say(r&&r.status==='delivered'?'Export sent.':'Export saved.'); }
+    catch(e){ say(e&&e.code==='declined'?'Export not saved.':'Could not save the export.'); }
+    return;
+  }
+  try{
+    const url=URL.createObjectURL(new Blob([json],{type:'application/json'}));
+    const a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),2000);
+    say('Export downloaded: '+name);
+  }catch(e){ say('Could not create the export.'); }
+}
+function readText(f){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(String(r.result)); r.onerror=()=>rej(r.error); r.readAsText(f); }); }
+async function importFile(file){
+  if(!file) return;
+  if(file.size>MAX_FILE){ say('That file is larger than 5 MB. Nothing was imported.'); return; }
+  let o=null;
+  try{ o=JSON.parse(await readText(file)); }catch(e){ say('This file could not be read as JSON.'); return; }
+  if(!isObj(o)||o.format!=='bsp-sync'||o.version!==1||!isObj(o.data)){ say('This is not a board planner sync file.'); return; }
+  const d=o.data; let added=0, priceN=0, shareN=0, setMsg='no settings in the file';
+  if(Array.isArray(d.signoffs)) d.signoffs.slice(0,5000).forEach(r=>{
+    const id=isObj(r)&&typeof r.id==='string'?r.id:''; const c=cleanSignoff(id,r);
+    if(c&&!cache.signoffs[id]){ cache.signoffs[id]=c; enqueue('signoffs',id,'put'); added++; }
+  });
+  if(Array.isArray(d.shares)) d.shares.slice(0,5000).forEach(r=>{
+    const id=isObj(r)?str(r.designId||r.id,200):''; const c=cleanShare(id,r); if(!c) return;
+    if(!cache.shares[id]||shareStamp(c)>shareStamp(cache.shares[id])){ cache.shares[id]=c; enqueue('shares',id,'put'); shareN++; }
+  });
+  const np=normPrices(d.prices);
+  if(np){ priceN=mergePrices(np.doc); if(priceN>0) enqueue('prices','doc','put'); }
+  const sf=cleanRemoteSettings(d.settings);
+  if(sf){
+    if(sf.updatedAt>(cache.settings?cache.settings.updatedAt:-1)){ applySettings(sf); enqueue('settings','doc','put'); setMsg='settings newer, applied'; }
+    else setMsg='settings older, kept yours';
+  }
+  persist(); emit('signoffs','remote',null); emit('shares','remote',null); emit('prices','remote',null);
+  statusChanged(); flush();
+  say(`Merged: ${added} sign-off${added===1?'':'s'} added, ${priceN} price${priceN===1?'':'s'} updated, ${setMsg}, ${shareN} share${shareN===1?'':'s'} updated.`);
+}
+function buildUi(){
+  const box=document.querySelector('header .themeBox'), hdr=document.querySelector('header');
+  if(!box||!hdr) return;
+  pill=document.createElement('button'); pill.type='button'; pill.id='syncPill'; pill.className='b sync-pill';
+  pill.setAttribute('aria-expanded','false'); pill.setAttribute('aria-controls','syncPanel');
+  box.appendChild(pill);
+  panel=document.createElement('div'); panel.id='syncPanel'; panel.className='sync-panel'; panel.hidden=true;
+  panel.innerHTML='<p class="hint">Changes are kept on this device and sent when the connection is back. Export a file to move them to another device, or import one here to merge it in.</p>'+
+    '<div class="btns"><button class="b" type="button" id="syncExport">Export changes</button></div>'+
+    '<label>Import and merge a sync file<input type="file" accept=".json,application/json" id="syncFile"></label>'+
+    '<p class="sync-msg" id="syncMsg" role="status" aria-live="polite"></p>';
+  hdr.insertAdjacentElement('afterend',panel);
+  msgEl=panel.querySelector('#syncMsg');
+  pill.addEventListener('click',()=>{ panel.hidden=!panel.hidden; pill.setAttribute('aria-expanded',String(!panel.hidden)); });
+  panel.querySelector('#syncExport').addEventListener('click',()=>{ exportChanges(); });
+  panel.querySelector('#syncFile').addEventListener('change',e=>{ const f=e.target.files&&e.target.files[0]; e.target.value=''; importFile(f); });
+  paint();
+}
+
+/* ---- start ---- */
+async function start(){
+  loadState();
+  migrateLegacy();
+  if(!cache.settings){ const s=settingsOf(snapS()); cache.settings=Object.assign(s,{updatedAt:0}); }
+  persist();
+  let remote=false;
+  try{ remote=await openRemote(); }catch(e){ remote=false; }
+  mode=remote?'remote':'local';
+  openResolve();
+  statusChanged();
+  if(!remote){ finishReady(); return; }
+  readyTimer=setTimeout(finishReady,READY_MS);
+  subscribeAll();
+}
+
+/* ---- the store API ---- */
+const peekOf=(kind,id)=>{ if(SINGLE[kind]) return clone(cache[kind]); return clone(cache[kind][String(id)]||null); };
+window.bspStore={
+  get: async (kind,id)=>peekOf(kind,id),
+  list: async kind=>{ if(SINGLE[kind]) return cache[kind]?[clone(cache[kind])]:[]; if(!COLL[kind]) return []; return Object.keys(cache[kind]).map(id=>Object.assign({id},clone(cache[kind][id]))); },
+  put: (kind,id,data)=>put(kind,id,data),
+  remove: (kind,id)=>remove(kind,id),
+  onChange(kind,fn){ if(typeof fn!=='function') return ()=>{}; (listeners[kind]=listeners[kind]||new Set()).add(fn); return ()=>{ if(listeners[kind]) listeners[kind].delete(fn); }; },
+  ready: ()=>readyP,
+  opened: ()=>openedP,
+  mode: ()=>mode,
+  pending: ()=>outbox.length,
+  peek: (kind,id)=>peekOf(kind,id),
+  peekAll: kind=>SINGLE[kind]?clone(cache[kind]):clone(cache[kind]||{})
+};
+
+window.addEventListener('bsp:save',()=>{ clearTimeout(stTimer); stTimer=setTimeout(checkSettings,SETTINGS_MS); });
+window.addEventListener('bsp:status',paint);
+window.addEventListener('online',()=>{ flush(); statusChanged(); });
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') flush(); });
+window.addEventListener('pagehide',()=>{ try{persist();}catch(e){} });
+setInterval(()=>{ if(outbox.length&&navigator.onLine!==false) flush(); },RETRY_MS);
+
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',buildUi); else buildUi();
+start().catch(e=>{ console.error(e); mode='local'; openResolve(); finishReady(); });
+})();
+</script>
+<!-- ===== end of slot E ===== -->
+
 <!-- ===== feature slot A: quote sheet. Only edit between the two tags below. ===== -->
 <style id="feat-quote-css">
 .qwrap{display:grid;gap:14px;min-width:0}
@@ -3846,38 +4296,53 @@ function norm(o){
   const m=x=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.entries(x).filter(([k,v])=>typeof v==='string')):{};
   return {p:m(o.p),hours:m(o.hours),labour:s(o.labour),markup:s(o.markup),vat:s(o.vat),cur:s(o.cur,'Ft')};
 }
-let PRICES=norm(null), edited=false, ready=false, store=null, ref=null, dlCap=null;
-let lastSaved='', saveT=0, lastD=null, lastEl=null;
-function lsGet(){try{return JSON.parse(localStorage.getItem('bsp-prices')||'null');}catch(e){return null;}}
-function lsSet(s){try{localStorage.setItem('bsp-prices',s);}catch(e){}}
-function adopt(o){
-  const n=norm(o);
+let PRICES=norm(null), edited=false, ready=false, saveT=0, lastD=null, lastEl=null, dlCap=null;
+/* the store keeps prices as {items:{'p:key'|'h:id':{v,ts}}, meta:{labour,markup,vat,cur,ts}}; the editor works on the flat shape */
+function flatOf(doc){
+  const f={p:{},hours:{}}, it=(doc&&doc.items)||{}, m=(doc&&doc.meta)||{};
+  Object.keys(it).forEach(k=>{const v=it[k]&&typeof it[k].v==='string'?it[k].v:''; if(k.slice(0,2)==='p:') f.p[k.slice(2)]=v; else if(k.slice(0,2)==='h:') f.hours[k.slice(2)]=v;});
+  f.labour=m.labour||''; f.markup=m.markup||''; f.vat=m.vat||''; f.cur=m.cur!==undefined?m.cur:'Ft';
+  return norm(f);
+}
+/* only the values that changed get a new timestamp, so a newer price from another device is not overwritten by an old one */
+function docOf(P,prev){
+  const t=Date.now(), items=Object.assign({},(prev&&prev.items)||{});
+  const put=(k,v)=>{const val=v==null?'':String(v), old=items[k]; if(old?old.v!==val:val!==''){items[k]={v:val,ts:t};}};
+  Object.keys(P.p).forEach(k=>put('p:'+k,P.p[k]));
+  Object.keys(P.hours).forEach(k=>put('h:'+k,P.hours[k]));
+  const meta=Object.assign({},(prev&&prev.meta)||{}); let changed=false;
+  ['labour','markup','vat','cur'].forEach(k=>{const want=P[k]||''; if((meta[k]||'')!==want){meta[k]=want; changed=true;}});
+  meta.ts=changed?t:(meta.ts||0);
+  return {items,meta};
+}
+function adopt(doc){
+  const n=flatOf(doc);
   if(!edited){PRICES=n;return;}
   const c=PRICES;   /* typed before the load finished: keep what was typed */
   PRICES={p:{...n.p,...c.p},hours:{...n.hours,...c.hours},labour:c.labour,markup:c.markup,vat:c.vat,cur:c.cur};
 }
 function flush(){
   saveT&&clearTimeout(saveT); saveT=0;
-  if(!ready) return;
-  const s=JSON.stringify(PRICES); if(s===lastSaved) return;
-  if(store==='db'&&ref){lastSaved=s;ref.set(JSON.parse(s)).catch(()=>{lastSaved='';});}
-  else{lsSet(s);lastSaved=s;}
+  if(!ready||!window.bspStore) return;
+  const prev=window.bspStore.peek('prices'), doc=docOf(PRICES,prev);
+  if(!prev&&!Object.keys(doc.items).length&&!doc.meta.ts) return;   /* nothing typed: write nothing */
+  if(prev&&JSON.stringify(prev)===JSON.stringify(doc)) return;
+  window.bspStore.put('prices',null,doc);
 }
 function queueSave(){edited=true;clearTimeout(saveT);saveT=setTimeout(flush,600);}
 async function load(){
-  let db=null,user=null;
-  try{db=await window.bspUse('db');}catch(e){}
-  try{user=await window.bspUse('user');}catch(e){}
-  try{dlCap=await window.bspUse('downloads');}catch(e){dlCap=null;}
-  try{
-    if(db&&user){
-      const id=await user.id();
-      if(id){const r=db.collection('data/users/'+id).doc('prices'); const snap=await r.get(); ref=r; store='db'; adopt(snap&&snap.exists?snap.data():null);}
-    }
-  }catch(e){ref=null;store=null;}
-  if(store!=='db'){store='local';adopt(lsGet());}
-  lastSaved=JSON.stringify(PRICES); ready=true;
+  try{ await window.bspStore.ready(); }catch(e){}
+  try{ dlCap=await window.bspUse('downloads'); }catch(e){ dlCap=null; }
+  adopt(window.bspStore.peek('prices'));
+  ready=true;
   if(edited) flush();
+  window.bspStore.onChange('prices',ev=>{
+    if(ev.origin!=='remote') return;
+    adopt(window.bspStore.peek('prices'));
+    const sec=lastEl&&lastEl.querySelector(':scope > details.quote-sec');
+    if(sec&&sec.contains(document.activeElement)) return;   /* do not rebuild the editor under the typist */
+    if(lastD&&lastEl&&lastEl.isConnected) mount(lastD,lastEl);
+  });
   if(lastD&&lastEl&&lastEl.isConnected) mount(lastD,lastEl);
 }
 
@@ -4084,7 +4549,7 @@ load().catch(()=>{});
 </style>
 <script id="feat-signoff">
 (()=>{
-const LS='bsp-signoffs', SUBST=['concrete','brick','timber joist','steel','other'];
+const SUBST=['concrete','brick','timber joist','steel','other'];
 const drafts={}; let svc=null, svcP=null, sub=null, viewId=null, curD=null, curSec=null, secOpen=true;
 const esc=s=>window.bspApi.esc(s==null?'':s);
 const S=()=>svc||{db:null,user:null,assets:null,dl:null};
@@ -4113,25 +4578,19 @@ function gate(d){
   return {dr,anc,fails,todo,checksLeft,busy,ok:anc.length>0&&!fails.length&&!todo.length&&!checksLeft&&!busy};
 }
 /* ---- storage ---- */
-function loadLocal(){try{const a=JSON.parse(localStorage.getItem(LS)||'[]');return Array.isArray(a)?a:[];}catch(e){return [];}}
-function saveLocal(a){try{localStorage.setItem(LS,JSON.stringify(a));return true;}catch(e){return false;}}
 function dropSub(){if(!sub)return;clearTimeout(sub.timer);try{if(sub.unsub)sub.unsub();}catch(e){}sub=null;viewId=null;}
 function ensureSub(d){
   if(sub&&sub.designId===d.id)return;
   dropSub();
   const s=sub={designId:d.id,records:[],status:'loading',unsub:null,timer:null};
-  getSvc().then(()=>{
+  const pull=()=>window.bspStore.list('signoffs').then(all=>{
     if(sub!==s)return;
-    const db=svc.db;
-    if(!db){s.status='local';s.records=loadLocal().filter(r=>r.designId===s.designId);renderHistory();return;}
-    s.timer=setTimeout(()=>{if(sub===s&&s.status==='loading'){s.status='error';renderHistory();}},10000);
-    try{
-      s.unsub=db.collection('signoffs').where('designId','==',s.designId).onSnapshot(snap=>{
-        if(sub!==s)return;clearTimeout(s.timer);
-        s.records=snap.docs.map(x=>Object.assign({id:x.id},x.data()||{}));
-        s.status='ok';renderHistory();
-      },()=>{if(sub!==s)return;clearTimeout(s.timer);s.status='error';renderHistory();});
-    }catch(e){clearTimeout(s.timer);s.status='error';renderHistory();}
+    s.records=all.filter(r=>r.designId===s.designId); s.status='ok'; renderHistory();
+  });
+  window.bspStore.ready().then(()=>{
+    if(sub!==s)return;
+    pull();
+    s.unsub=window.bspStore.onChange('signoffs',()=>{ if(sub===s) pull(); });
   });
 }
 /* ---- rendering ---- */
@@ -4168,7 +4627,7 @@ function build(){
     <h4>Checks (tick every one)</h4>
     <div class="so-grid">${d.rig.check.map((c,i)=>`<label class="so-check"><input type="checkbox" data-chk="${i}"${dr.checks[i]?' checked':''}><span>${esc(c)}</span></label>`).join('')}</div>
     <div class="so-status" role="status" aria-live="polite"></div>
-    ${s.db?'':'<p class="hint">Saved on this device only.</p>'}
+    ${window.bspStore.mode()==='remote'?'':'<p class="hint">Saved on this device only.</p>'}
     <div class="btns"><button class="b p" type="button" id="so-save">Save sign-off record</button><span class="toast so-fmsg"></span></div>
     <h4>History</h4>
     <div class="so-hist"></div>`;
@@ -4254,9 +4713,9 @@ async function saveRecord(){
   try{if(s.user)rec.installerId=(await s.user.id())||null;}catch(e){}
   const msg=t=>{const m=curSec&&curSec.querySelector('.so-fmsg');if(m)m.textContent=t;};
   try{
-    if(s.db){await s.db.collection('signoffs').doc(id).set(rec);}
-    else{const all=loadLocal();all.push(Object.assign({id},rec));if(!saveLocal(all)){msg('Not saved: this device refused to store it. Download the record instead.');return;}}
-  }catch(e){msg('Not saved: the record store refused the write. Check your access and try again.');return;}
+    const kept=await window.bspStore.put('signoffs',id,Object.assign({id},rec));
+    if(!kept){msg('Not saved: this device refused to store it. Download the record instead.');return;}
+  }catch(e){msg('Not saved: this device refused to store it. Download the record instead.');return;}
   if(sub&&sub.designId===d.id&&!sub.records.some(r=>r.id===id))sub.records.push(Object.assign({id},rec));
   // keep the job details for the next record, clear the test results
   const keep={job:dr.job,location:dr.location,installerName:dr.installerName,date:dr.date};
@@ -4368,26 +4827,19 @@ body.bsp-client #bsp-gallery,body.bsp-pending #bsp-gallery{display:flex}
 (function(){
 'use strict';
 const KEYS=['stock','wallW','maxH','gap','minD','kerf','mat','load','ceil','person','sf','sfb'];
-const LS='bsp-shares', WAIT_MS=10000;
+const WAIT_MS=10000;
 const {esc,fmt,renderScene}=window.bspApi;
 const st={db:null,user:null,comments:null,owner:false,pending:true,preview:false,shares:{},cache:new Map(),drafts:{},cur:null,timer:null,gallery:null};
 
 const snapSettings=()=>{const S=window.bspApi.S,o={};KEYS.forEach(k=>{if(S[k]!==undefined)o[k]=S[k];});return JSON.parse(JSON.stringify(o));};
-const clean=(id,v)=>(v&&typeof v==='object'&&v.settings&&Array.isArray(v.settings.stock))
+const clean=(id,v)=>(v&&typeof v==='object'&&!v.removed&&v.settings&&Array.isArray(v.settings.stock))
   ?{designId:String(v.designId||id),name:String(v.name||id),note:String(v.note||''),settings:v.settings,fit:(v.fit&&typeof v.fit==='object')?v.fit:null,sharedAt:String(v.sharedAt||'')}:null;
 const cleanAll=m=>{const o={};Object.keys(m||{}).forEach(k=>{const c=clean(k,m[k]);if(c)o[k]=c;});return o;};
-function localRead(){try{const v=JSON.parse(localStorage.getItem(LS)||'{}');return v&&typeof v==='object'?v:{};}catch(e){return {};}}
-function localWrite(m){try{localStorage.setItem(LS,JSON.stringify(m));return true;}catch(e){return false;}}
 
 /* one write per owner click; data null removes the share */
 async function store(id,data){
-  if(!st.db){
-    const m=localRead(); if(data) m[id]=data; else delete m[id];
-    if(!localWrite(m)) throw new Error('storage blocked');
-    st.shares=cleanAll(m); return;
-  }
-  const ref=st.db.collection('shares').doc(id);
-  if(data) await ref.set(data); else await ref.delete();
+  const ok=data?await window.bspStore.put('shares',id,data):await window.bspStore.remove('shares',id);
+  if(!ok) throw new Error('not stored');
   const next={...st.shares};
   if(data) next[id]=clean(id,data); else delete next[id];
   st.shares=next;
@@ -4471,29 +4923,26 @@ function addChip(){
 /* client: 10 s without a server answer falls back to the normal planner */
 function settle(){ if(st.timer){clearTimeout(st.timer);st.timer=null;} st.pending=false; refresh(); }
 function listen(){
-  try{
-    st.db.collection('shares').onSnapshot(snap=>{
-      const m={}; (snap.docs||[]).forEach(d=>{const c=clean(d.id,d.data()); if(c) m[d.id]=c;});
-      st.shares=m;
-      if(!snap.metadata||!snap.metadata.fromCache) settle(); else refresh();
-    },()=>settle());
-  }catch(e){ settle(); }
+  window.bspStore.onChange('shares',()=>{ st.shares=cleanAll(window.bspStore.peekAll('shares')); refresh(); });
+  window.bspStore.ready().then(()=>{ st.shares=cleanAll(window.bspStore.peekAll('shares')); settle(); });
 }
 
 async function boot(){
   const main=document.querySelector('main.layout');
   if(main){ const g=document.createElement('section'); g.id='bsp-gallery'; g.setAttribute('aria-live','polite'); main.appendChild(g); st.gallery=g; g.addEventListener('click',pick); }
-  const [db,user,comments]=await Promise.all([window.bspUse('db'),window.bspUse('user'),window.bspUse('comments')]);
-  st.db=db; st.user=user; st.comments=comments;
+  const [user,comments]=await Promise.all([window.bspUse('user'),window.bspUse('comments')]);
+  st.user=user; st.comments=comments;
+  await window.bspStore.opened();
+  const remote=window.bspStore.mode()==='remote';
   let canEdit=false; if(user){ try{canEdit=!!(await user.canEdit());}catch(e){} }
-  st.owner=!db||!user||canEdit;   /* no capabilities = local testing, treated as owner */
+  st.owner=!remote||!user||canEdit;   /* no capabilities = local testing, treated as owner */
   if(st.owner) addChip();
-  if(db){
+  if(remote){
     st.pending=!st.owner;
     if(st.pending) st.timer=setTimeout(()=>{st.timer=null;settle();},WAIT_MS);
     listen();
   }else{
-    st.shares=cleanAll(localRead()); st.pending=false;
+    st.shares=cleanAll(window.bspStore.peekAll('shares')); st.pending=false;
   }
   refresh();
 }
